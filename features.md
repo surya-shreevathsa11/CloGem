@@ -106,14 +106,15 @@ Clogem can auto-build contextual snippets from repository source:
 
 Goal: reduce missing-context mistakes during code generation.
 
-## 10) Optional vector RAG
+## 10) Vector RAG (smart default when deps installed)
 
 Clogem can enable semantic retrieval over the full repo:
 
 - Uses LanceDB + sentence-transformers (optional deps)
-- Maintains file-hash manifest and incremental rebuild behavior
+- On by default when `pip install ".[vector]"` unless `CLOGEM_VECTOR_RAG=0`
+- Background index warmup on startup when enabled
 - Injects top semantic chunks into build context
-- Manual query command: `/rag/search <query>`
+- `/rag/search <query>` and `/rag/status`
 
 ## 11) Validation loop and safe execution
 
@@ -162,9 +163,26 @@ Clogem maintains session/project continuity:
 ## 16) CLI UX and discoverability
 
 - Rich terminal output and status traces
+- Turn traces written to `.clogem/logs/last-turn.json`
 - Prompt-toolkit completion for `/` and `@` menus
 - Session command hints in the REPL
 - Boot checks for required providers before workflow starts
+- `clogem run` for CI/scripts (same pipeline as REPL)
+
+## 17) Git workflow (in-session)
+
+- `/diff`, `/branch`, `/commit`, `/pr` with safeguards (no commits on `main`)
+- `clogem run --issue N` loads GitHub issue context via `gh`
+
+## 18) Plan-first and MCP context
+
+- `/plan` writes `.clogem/plan.md`; fresh plans prepend to BUILD prompts
+- BUILD auto-injects MCP context when Jira/GitHub refs match configured plugins
+
+## 19) Config profiles
+
+- TOML config + `fast` / `thorough` profiles
+- Per-stage timeouts: router, build, PDF, validation
 
 ---
 

@@ -50,6 +50,13 @@ class Settings:
     secondary_intent_llm: bool = True
     router_classifier_model: str = "gemini-2.5-flash-lite"
     subprocess_timeout_sec: int = 60
+    profile: str = "default"
+    router_timeout_sec: int = 60
+    build_timeout_sec: int = 180
+    pdf_timeout_sec: int = 180
+    validation_timeout_sec: int = 300
+    log_dir: str = ".clogem/logs"
+    plan_ttl_hours: int = 48
     validation_docker: bool = False
     strict_sandbox: bool = False
     validation_max_attempts: int = 2
@@ -114,6 +121,41 @@ class Settings:
             ),
             subprocess_timeout_sec=_as_int(
                 os.environ.get("CLOGEM_SUBPROCESS_TIMEOUT_SEC"), 60, minimum=1
+            ),
+            profile=_as_choice(
+                os.environ.get("CLOGEM_PROFILE"),
+                "default",
+                ("default", "fast", "thorough"),
+            ),
+            router_timeout_sec=_as_int(
+                os.environ.get("CLOGEM_ROUTER_TIMEOUT_SEC"),
+                _as_int(os.environ.get("CLOGEM_SUBPROCESS_TIMEOUT_SEC"), 60, minimum=1),
+                minimum=1,
+            ),
+            build_timeout_sec=_as_int(
+                os.environ.get("CLOGEM_BUILD_TIMEOUT_SEC"),
+                max(
+                    _as_int(os.environ.get("CLOGEM_SUBPROCESS_TIMEOUT_SEC"), 60, minimum=1),
+                    180,
+                ),
+                minimum=1,
+            ),
+            pdf_timeout_sec=_as_int(
+                os.environ.get("CLOGEM_PDF_TIMEOUT_SEC"), 180, minimum=1
+            ),
+            validation_timeout_sec=_as_int(
+                os.environ.get("CLOGEM_VALIDATION_TIMEOUT_SEC"),
+                max(
+                    _as_int(os.environ.get("CLOGEM_SUBPROCESS_TIMEOUT_SEC"), 60, minimum=1),
+                    300,
+                ),
+                minimum=1,
+            ),
+            log_dir=(
+                os.environ.get("CLOGEM_LOG_DIR", "").strip() or ".clogem/logs"
+            ),
+            plan_ttl_hours=_as_int(
+                os.environ.get("CLOGEM_PLAN_TTL_HOURS"), 48, minimum=1
             ),
             validation_docker=_as_bool(
                 os.environ.get("CLOGEM_VALIDATION_DOCKER"), False

@@ -36,7 +36,20 @@ Use these at the start of your message to control how that turn is handled:
 
 If you map a role to `claude` and `ANTHROPIC_API_KEY` is missing, Clogem prompts you to enter it for the current session.
 
-- `/config`: show parsed effective runtime settings for debugging
+- `/config`: show parsed effective runtime settings (includes config file sources)
+
+## Git workflow commands
+
+- `/diff`: diff for files written this session
+- `/branch <name>`: create and checkout a feature branch (refuses on `main`/`master`)
+- `/commit`: draft conventional commit message (summariser role), confirm, then commit
+- `/pr`: draft PR title/body and run `gh pr create` (requires `gh` on PATH)
+
+## Plan commands
+
+- `/plan <task>`: write `.clogem/plan.md` via planner role
+- `/plan show`: display current plan if fresh
+- `/plan clear`: remove `.clogem/plan.md`
 
 ## Repo and local execution commands
 
@@ -63,6 +76,28 @@ If you map a role to `claude` and `ANTHROPIC_API_KEY` is missing, Clogem prompts
 - `/mcp/tools <plugin>`: list plugin tools
 - `/mcp/call <plugin> <tool> [json-args]`: invoke plugin tool
 
-## RAG command
+## RAG commands
 
 - `/rag/search <query>`: semantic search over local vector index
+- `/rag/status`: index path, manifest stats, dependency availability
+
+## Non-interactive mode (outside the REPL)
+
+```bash
+clogem run "/build fix the failing test"
+clogem run --task-file .clogem/task.md --yes
+clogem run --issue 22 "/build implement the issue"
+clogem run --json-trace "generate a pdf summary of the API"
+```
+
+Options: `--yes` (skip confirm prompts), `--json-trace` (print last-turn trace path).
+
+## Project config file
+
+Optional `.clogem.toml` in the repo or `~/.config/clogem/config.toml`:
+
+```toml
+profile_name = "thorough"
+build_timeout_sec = 300
+vector_rag = true
+```

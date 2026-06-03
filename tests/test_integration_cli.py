@@ -21,6 +21,8 @@ def _write_fake_clis(bin_dir: Path) -> None:
                 "prompt = args[-1] if args else ''",
                 "if 'You update long-lived session memory' in prompt:",
                 "    print('NONE')",
+                "elif 'reviewing a draft PDF document body' in prompt:",
+                "    print('Hello PDF reviewed\\n\\nSecond paragraph reviewed.')",
                 "elif 'Improve the code.' in prompt and 'Feedback:' in prompt:",
                 "    print('```python\\ndef answer(x: int) -> int:\\n    return x\\n```')",
                 "elif 'TASK:' in prompt:",
@@ -44,7 +46,11 @@ def _write_fake_clis(bin_dir: Path) -> None:
                 "    i = args.index('-p')",
                 "    if i + 1 < len(args):",
                 "        prompt = args[i + 1]",
-                "if 'Compare and summarize improvements.' in prompt:",
+                "if 'plain text suitable for ReportLab' in prompt or 'PDF document' in prompt or 'drafting the body of a plain-text PDF' in prompt:",
+                "    print('Hello PDF\\n\\nSecond paragraph of the PDF.')",
+                "elif 'reviewing a draft PDF document body' in prompt:",
+                "    print('Hello PDF reviewed\\n\\nSecond paragraph reviewed.')",
+                "elif 'Compare and summarize improvements.' in prompt:",
                 "    print('Summary: improved typing and consistency.')",
                 "else:",
                 "    print('Review: add explicit type hints and tighten style.')",
@@ -86,6 +92,47 @@ def _write_fake_clis(bin_dir: Path) -> None:
             os.chmod(gemini_sh, 0o755)
         except OSError:
             pass
+
+
+def _run_cli_run_subcommand(
+    repo_root: Path,
+    task: str,
+    bin_dir: Path,
+    extra_args: list[str] | None = None,
+    extra_env: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess:
+    """Run `clogem run <task>` (non-interactive subcommand)."""
+    env = os.environ.copy()
+    env["PATH"] = str(bin_dir) + os.pathsep + env.get("PATH", "")
+    codex_exec = "codex.cmd" if os.name == "nt" else "codex"
+    gemini_exec = "gemini.cmd" if os.name == "nt" else "gemini"
+    env["CLOGEM_CODEX_CMD"] = str(bin_dir / codex_exec)
+    env["CLOGEM_GEMINI_CMD"] = str(bin_dir / gemini_exec)
+    env["CLOGEM_AUTO_PERMISSIONS"] = "yes"
+    env["CLOGEM_STITCH"] = "0"
+    env["CLOGEM_AUTO_REPO_CONTEXT"] = "0"
+    env["CLOGEM_SYMBOL_INDEX"] = "0"
+    env["CLOGEM_GIT_CONTEXT"] = "0"
+    env["CLOGEM_VECTOR_RAG"] = "0"
+    env["CLOGEM_GEMINI_REALTIME"] = "0"
+    env["PYTHONIOENCODING"] = "utf-8"
+    if extra_env:
+        env.update(extra_env)
+
+    cmd = [sys.executable, "-m", "clogem.cli", "run", task]
+    if extra_args:
+        cmd.extend(extra_args)
+
+    return subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        cwd=str(repo_root),
+        env=env,
+        timeout=60,
+    )
 
 
 def _run_cli(
@@ -155,19 +202,23 @@ def test_cli_build_pipeline_mocked(tmp_path: Path):
 
 def test_cli_pdf_intent_does_not_trigger_build_pipeline(tmp_path: Path):
     """
-    Regression: natural-language PDF requests should not enter the build pipeline
-    (which can cause unrelated artifact generation).
+    Regression: natural-language PDF requests should not enter the build pipeline.
+    Instead they go through the Gemini-draft + reviewer + ReportLab pipeline.
     """
     repo_root = Path(__file__).resolve().parents[1]
     bin_dir = tmp_path / "bin"
     _write_fake_clis(bin_dir)
 
-    proc = _run_cli(repo_root, "generate a pdf hello\n/exit\n", bin_dir)
+    proc = _run_cli(
+        repo_root,
+        "generate a pdf hello\n/exit\n",
+        bin_dir,
+        extra_env={"CLOGEM_GEMINI_BACKEND": "cli"},
+    )
     out = (proc.stdout or "") + "\n" + (proc.stderr or "")
     assert proc.returncode == 0
     assert "Initial output" not in out
-    assert "Review (" not in out
-    assert "Summary (" not in out
+    assert "PDF generated" in out or "Wrote:" in out
 
 
 def test_cli_research_without_attachments_skips_build_pipeline(tmp_path: Path):
@@ -202,4 +253,17 @@ def test_cli_strict_sandbox_without_docker_fails_validation(tmp_path: Path):
     out = (proc.stdout or "") + "\n" + (proc.stderr or "")
     assert proc.returncode == 0
     assert "Strict sandbox mode requires Docker, which is not available." in out
+
+
+def test_cli_run_subcommand_ask(tmp_path: Path):
+    """clogem run '/ask hello' executes non-interactively and exits with code 0."""
+    repo_root = Path(__file__).resolve().parents[1]
+    bin_dir = tmp_path / "bin"
+    _write_fake_clis(bin_dir)
+
+    proc = _run_cli_run_subcommand(repo_root, "/ask hello", bin_dir)
+    out = (proc.stdout or "") + "\n" + (proc.stderr or "")
+    assert proc.returncode == 0, f"Expected exit 0, got {proc.returncode}.\nOutput:\n{out}"
+    # The run mode should produce some output (reply from orchestrator)
+    assert "Codex mock reply" in out or "Reply" in out or "clogem run" in out
 

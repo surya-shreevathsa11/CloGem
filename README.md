@@ -636,14 +636,34 @@ While Clogem is running, you can change models without restarting:
 | `/test`                                    | Run project tests (best-effort; Python or Node)                               |
 | `/lint`                                    | Run project lint (best-effort; Python or Node)                                |
 | `/run <cmd>`                               | Run a local command (requires permission; allowlist enforced)                 |
-| `/pdf`                                     | Generate a PDF from provided text (plain-text layout; uses `reportlab`)       |
+| `/pdf`                                     | Generate a PDF — Gemini drafts the body, reviewer role refines it, ReportLab writes the `.pdf`. Natural-language requests (e.g. "generate a PDF about…") are also routed here automatically. Set `CLOGEM_PDF_TIMEOUT_SEC` (default 180) for longer LLM calls. |
 | `/github/info <url or owner/repo>`         | Show public GitHub repository metadata (description, stars, language, branch) |
 | `/github/clone <url or owner/repo> [dest]` | Clone repository into local folder (`dest` optional)                          |
 | `/mcp/plugins`                             | List configured MCP plugins                                                   |
 | `/mcp/tools <plugin>`                      | List tools published by a plugin                                              |
 | `/mcp/call <plugin> <tool> [json-args]`    | Invoke an MCP tool with JSON arguments                                        |
 | `/rag/search <query>`                      | Run semantic search over the local full-repo vector index                     |
+| `/rag/status`                              | Vector index health (manifest, deps, path)                                  |
+| `/diff`                                    | Git diff for files Clogem wrote this session                                |
+| `/branch <name>`                           | Create feature branch (blocked on `main`/`master`)                          |
+| `/commit`                                  | Draft + confirm conventional commit (summariser role)                     |
+| `/pr`                                      | Create GitHub PR via `gh`                                                   |
+| `/plan <task>` / `/plan show` / `/plan clear` | Plan-first workflow (`.clogem/plan.md`)                                  |
 
+
+### Non-interactive: `clogem run`
+
+```bash
+clogem run "/build add retry logic to LLM calls"
+clogem run --issue 22 --yes
+clogem run --task-file task.md --json-trace
+```
+
+Uses the same pipeline as the REPL. `--yes` skips confirmation on `/commit`-style flows in run mode.
+
+### Config file (optional)
+
+`~/.config/clogem/config.toml` or `.clogem.toml` in the repo. Profiles: `fast`, `thorough`, `default`. Env vars still override.
 
 ---
 
