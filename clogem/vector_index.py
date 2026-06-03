@@ -388,3 +388,55 @@ def semantic_search_repo(
     idx = VectorIndex(repo_root, config)
     return idx.query(task)
 
+
+def get_index_status(repo_root: str) -> dict:
+    """Return diagnostic status for the vector index (for /rag/status)."""
+    repo_root = os.path.abspath(repo_root)
+    index_dir = os.path.join(repo_root, _DEFAULT_INDEX_DIRNAME)
+    manifest_path = os.path.join(index_dir, "manifest.json")
+    deps_ok = False
+    deps_error = ""
+    try:
+        import lancedb  # noqa: F401
+        from sentence_transformers import SentenceTransformer  # noqa: F401
+
+        deps_ok = True
+    except Exception as e:
+        deps_error = str(e)
+
+    manifest_count = 0
+    manifest_mtime: Optional[float] = None
+    if os.path.isfile(manifest_path):
+        try:
+            with open(manifest_path, encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                manifest_count = len(data)
+            manifest_mtime = os.path.getmtime(manifest_path)
+        except Exception:
+            pass
+
+    return {
+        "index_dir": index_dir,
+        "manifest_path": manifest_path,
+        "manifest_file_count": manifest_count,
+        "manifest_mtime": manifest_mtime,
+        "deps_available": deps_ok,
+        "deps_error": deps_error,
+        "index_exists": os.path.isdir(index_dir),
+    }
+
+
+def warm_vector_index(repo_root: str, *, rebuild: bool = False) -> None:
+    """Background-friendly index refresh; logs failures at debug only."""
+    from clogem.logging_utils import get_logger
+
+    logger = get_logger(__name__)
+    try:
+        cfg = VectorIndexConfig(enabled=True, rebuild=rebuild)
+        idx = VectorIndex(repo_root, cfg)
+        if idx._index_is_stale():  # noqa: SLF001 — intentional warmup
+            idx.refresh()
+    except Exception:
+        logger.debug("Vector index warmup failed", exc_info=True)
+

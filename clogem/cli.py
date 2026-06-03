@@ -65,6 +65,7 @@ async def async_main():
     from clogem.stitch import detect_stitch_frontend_heavy_task
     from clogem.stitch.adapters import looks_like_ui_content
     from clogem.task_intent import build_prerequisite_first_prompt, detect_prerequisite_first_task
+    from clogem.services.pdf_pipeline import PdfPipelineDeps, run_pdf_generation_pipeline, wants_pdf_handling
     from clogem.write_safety import apply_unified_diff_safely, plan_safe_writes
     from clogem.command_policy import ALLOWED_EXECUTABLES, validate_local_command_args
     from clogem.llm_clients import (
@@ -168,11 +169,35 @@ async def async_main():
             "fallback to the tempfile filesystem sandbox otherwise."
         ),
     )
+    _ap.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Enable verbose (INFO) logging to stderr.",
+    )
+
+    _subparsers = _ap.add_subparsers(dest="subcommand")
+    _run_sp = _subparsers.add_parser(
+        "run",
+        help="Execute a single non-interactive task and exit.",
+    )
+    _run_sp.add_argument("task", nargs="?", default=None, help="Task text to execute.")
+    _run_sp.add_argument("--task-file", metavar="PATH", default=None, help="Read task from file.")
+    _run_sp.add_argument("--issue", type=int, default=None, metavar="N", help="Link to GitHub issue N.")
+    _run_sp.add_argument("--yes", action="store_true", help="Skip confirmation prompts.")
+    _run_sp.add_argument("--json-trace", action="store_true", help="Print trace path on completion.")
+
     _args = _ap.parse_args()
     _codex_model = (_args.codex_model or os.environ.get("CLOGEM_CODEX_MODEL") or "").strip() or None
     _gemini_model = (_args.gemini_model or os.environ.get("CLOGEM_GEMINI_MODEL") or "").strip() or None
     _claude_model = (_args.claude_model or os.environ.get("CLOGEM_CLAUDE_MODEL") or "").strip() or None
-    settings = Settings.from_env()
+
+    from clogem.config_loader import load_settings as _load_settings
+    _cli_overrides: dict = {}
+    if getattr(_args, "validation_docker", False):
+        _cli_overrides["validation_docker"] = True
+    if getattr(_args, "verbose", False):
+        _cli_overrides["debug"] = True
+    settings, config_sources = _load_settings(cwd=os.getcwd(), cli_overrides=_cli_overrides or None)
 
     loop = asyncio.get_running_loop()
 
@@ -210,6 +235,11 @@ async def async_main():
     if not await asyncio.to_thread(boot_sequence, needed_providers(role_provider_map)):
         raise SystemExit(1)
 
+    # Configure verbose logging if requested
+    if settings.debug or getattr(_args, "verbose", False):
+        import logging as _logging
+        _logging.basicConfig(level=_logging.INFO, stream=sys.stderr, force=True)
+
     # Accent (rose) + Claude-like neutrals (dim rules, soft reasoning frames)
     BORDER = "#ffafaf"
     TITLE = "bold #be5555"
@@ -225,6 +255,27 @@ async def async_main():
     LOG_TRACE = "italic #9a7a7a"
 
     console = Console()
+
+    # --- Session state (shared across turns) ---
+    from clogem.runtime.session import SessionState
+    session = SessionState()
+    if getattr(_args, "subcommand", None) == "run":
+        session.run_auto_yes = getattr(_args, "yes", False)
+        session.linked_issue = getattr(_args, "issue", None)
+
+    # Background vector index warmup
+    if settings.vector_rag:
+        try:
+            from clogem.vector_index import warm_vector_index as _warm_vector_index
+            threading.Thread(
+                target=_warm_vector_index,
+                args=(ROOT,),
+                kwargs={"rebuild": settings.vector_rebuild},
+                daemon=True,
+            ).start()
+        except Exception:
+            pass
+
     # Best-effort token totals per provider (parsed from CLI output when present).
     session_tokens = {"codex": 0, "gemini": 0, "claude": 0}
     # None = not asked yet; True/False = user chose whether to pass Codex --full-auto and Gemini --yolo.
@@ -1300,19 +1351,18 @@ async def async_main():
             in ("1", "true", "yes", "on")
         )
 
-        # Fast path: copy only git-tracked files (near-instant for large repos).
+        # Fast path: copy git-tracked files + session-written untracked extras.
         try:
-            from clogem.validation import copy_git_tracked_repo_to_sandbox
+            from clogem.validation import copy_repo_to_sandbox_with_extras
 
-            used_git, _copied = copy_git_tracked_repo_to_sandbox(
+            ignore_prefixes = (
+                ("node_modules/", ".git/") if not include_node_modules else (".git/",)
+            )
+            used_git, _copied = copy_repo_to_sandbox_with_extras(
                 src,
                 sandbox_root,
-                extra_ignore_prefixes=(
-                    "node_modules/",
-                    ".git/",
-                )
-                if not include_node_modules
-                else (".git/",),
+                extra_rel_paths=list(session.written_files),
+                extra_ignore_prefixes=ignore_prefixes,
             )
             if used_git:
                 return sandbox_root, src
@@ -1638,14 +1688,19 @@ async def async_main():
             )
             raise
 
-    async def run_codex(prompt: str, status_msg: str) -> Tuple[str, str, int]:
+    async def run_codex(
+        prompt: str,
+        status_msg: str,
+        *,
+        llm_timeout_sec: Optional[int] = None,
+    ) -> Tuple[str, str, int]:
         backend = settings.codex_backend
         sdk_model = (
             models.get("codex")
             or os.environ.get("CLOGEM_CODEX_SDK_MODEL", "").strip()
             or "gpt-4.1-mini"
         )
-        timeout = _subprocess_timeout_sec() or 60
+        timeout = llm_timeout_sec or _subprocess_timeout_sec() or 60
 
         # google-genai async client has shown intermittent cleanup crashes in some
         # environments (`_async_httpx_client` missing). Keep grounded lookup on
@@ -1707,14 +1762,19 @@ async def async_main():
         _record_tokens("codex", combined)
         return stdout or "", stderr or "", rc
 
-    async def run_gemini(prompt: str, status_msg: str) -> Tuple[str, str, int]:
+    async def run_gemini(
+        prompt: str,
+        status_msg: str,
+        *,
+        llm_timeout_sec: Optional[int] = None,
+    ) -> Tuple[str, str, int]:
         backend = settings.gemini_backend
         sdk_model = (
             models.get("gemini")
             or os.environ.get("CLOGEM_GEMINI_SDK_MODEL", "").strip()
             or "gemini-2.5-flash"
         )
-        timeout = _subprocess_timeout_sec() or 60
+        timeout = llm_timeout_sec or _subprocess_timeout_sec() or 60
 
         # Keep Gemini on sync SDK path for stability. Some google-genai async
         # client versions raise `_async_httpx_client` cleanup errors.
@@ -1875,14 +1935,19 @@ async def async_main():
 
         return "", "Gemini grounded call unavailable.", 1
 
-    async def run_claude(prompt: str, status_msg: str) -> Tuple[str, str, int]:
+    async def run_claude(
+        prompt: str,
+        status_msg: str,
+        *,
+        llm_timeout_sec: Optional[int] = None,
+    ) -> Tuple[str, str, int]:
         backend = settings.claude_backend
         sdk_model = (
             models.get("claude")
             or os.environ.get("CLOGEM_CLAUDE_SDK_MODEL", "").strip()
             or "claude-sonnet-4-6"
         )
-        timeout = _subprocess_timeout_sec() or 60
+        timeout = llm_timeout_sec or _subprocess_timeout_sec() or 60
         use_async = settings.async_llm
 
         async def _run_sdk_async():
@@ -1912,14 +1977,20 @@ async def async_main():
         except Exception as e:
             return "", str(e), 1
 
-    async def run_role(role: str, prompt: str, status_msg: str) -> Tuple[str, str, int]:
+    async def run_role(
+        role: str,
+        prompt: str,
+        status_msg: str,
+        *,
+        llm_timeout_sec: Optional[int] = None,
+    ) -> Tuple[str, str, int]:
         provider = role_provider_map.get(role, "codex")
         if provider == "codex":
-            return await run_codex(prompt, status_msg)
+            return await run_codex(prompt, status_msg, llm_timeout_sec=llm_timeout_sec)
         if provider == "gemini":
-            return await run_gemini(prompt, status_msg)
+            return await run_gemini(prompt, status_msg, llm_timeout_sec=llm_timeout_sec)
         if provider == "claude":
-            return await run_claude(prompt, status_msg)
+            return await run_claude(prompt, status_msg, llm_timeout_sec=llm_timeout_sec)
         return "", f"Unsupported provider for role {role}: {provider}", 1
 
     def extract_code(text):
@@ -2780,6 +2851,7 @@ Return project edits as:
                 rel = p.target_path
             written[rel.replace("\\", "/")] = content
             _say(f"  [ok] wrote {rel}")
+        session.record_written(list(written.keys()))
         return written
 
     def _pick_entry(paths: List[str], preferred_basenames: List[str]) -> str:
@@ -2877,9 +2949,56 @@ Return project edits as:
     except OSError:
         STITCH_WEBSITE_RULES = ""
 
+    from clogem.turn_trace import begin_turn as _begin_turn, end_turn as _end_turn, stage as _stage, write_last_turn as _write_last_turn
+    from clogem.services.commands import handle_async_pipeline_command as _handle_async_commands
+    from clogem.services.task_pipelines import run_task_pipelines as _run_task_pipelines
+    from clogem.services.ci_fix_pipeline import fetch_ci_logs as _fetch_ci_logs
+    from clogem.mcp_context import gather_mcp_context as _gather_mcp_context
+    from clogem.services.plan_pipeline import read_plan_block as _read_plan_block
+
+    # --- `clogem run <task>`: one full REPL turn then exit ---
+    _single_run_mode = False
+    _single_run_pending: Optional[str] = None
+    _single_run_json_trace = False
+    if getattr(_args, "subcommand", None) == "run":
+        _run_task_text: Optional[str] = None
+        if getattr(_args, "task_file", None):
+            try:
+                _run_task_text = Path(_args.task_file).read_text(encoding="utf-8").strip()
+            except OSError as _e:
+                print(f"[clogem run] Cannot read --task-file: {_e}", file=sys.stderr)
+                raise SystemExit(1)
+        elif getattr(_args, "task", None):
+            _run_task_text = _args.task.strip()
+        if not _run_task_text:
+            print(
+                "[clogem run] No task provided. Use positional argument or --task-file.",
+                file=sys.stderr,
+            )
+            raise SystemExit(1)
+        session.run_auto_yes = bool(getattr(_args, "yes", False))
+        _single_run_json_trace = bool(getattr(_args, "json_trace", False))
+        if getattr(_args, "issue", None):
+            session.linked_issue = int(_args.issue)
+            from clogem.git_workflow import fetch_issue_context as _fetch_issue
+
+            _ok_iss, _iss_body = await asyncio.to_thread(
+                _fetch_issue, int(_args.issue)
+            )
+            if _ok_iss:
+                _run_task_text = (
+                    f"GitHub issue #{_args.issue} context:\n{_iss_body}\n\nTask:\n{_run_task_text}"
+                )
+            else:
+                console.print(Text(_iss_body, style=LOG_WARN))
+        _single_run_pending = _run_task_text
+        _single_run_mode = True
+
     first_turn = True
+    _turn_started = False
 
     while True:
+        _turn_started = False
         try:
             memory = load_memory()
             mem_block = format_memory_for_prompt(memory)
@@ -2941,7 +3060,11 @@ Return project edits as:
 
             # ---------- input (prompt_toolkit: / and @ dropdown when TTY) ----------
 
-            task = await read_task_line()
+            if _single_run_mode and _single_run_pending is not None:
+                task = _single_run_pending
+                _single_run_pending = None
+            else:
+                task = await read_task_line()
 
             if not task:
                 console.print(
@@ -2952,44 +3075,127 @@ Return project edits as:
                 )
                 continue
 
-            handled, should_exit = await asyncio.to_thread(
-                handle_pre_pipeline_command,
+            _begin_turn({"task_preview": task[:80]})
+            _turn_started = True
+
+            # Build CommandContext once and reuse for both sync and async handlers
+            _cmd_ctx = CommandContext(
+                console=console,
+                Text=Text,
+                MUTED=MUTED,
+                TITLE=TITLE,
+                LOG_WARN=LOG_WARN,
+                LOG_ERR=LOG_ERR,
+                LOG_OK=LOG_OK,
+                section_rule=section_rule,
+                models=models,
+                _codex_model=_codex_model,
+                _gemini_model=_gemini_model,
+                _claude_model=_claude_model,
+                role_provider_map=role_provider_map,
+                settings=settings,
+                _repo_root=_repo_root,
+                _select_test_cmd=_select_test_cmd,
+                _select_lint_cmd=_select_lint_cmd,
+                _run_local_command=_run_local_command,
+                _parse_github_repo_ref=_parse_github_repo_ref,
+                _github_repo_info=_github_repo_info,
+                ensure_run_permissions=ensure_run_permissions,
+                run_permissions=run_permissions,
+                _run_with_ascii_progress=_run_with_ascii_progress,
+                _run_proc=_run_proc,
+                _shlex_split_cmd=_shlex_split_cmd,
+                _mention_roots_list=_mention_roots_list,
+                _resolve_mention_path=_resolve_mention_path,
+                _path_allowed_for_mention=_path_allowed_for_mention,
+                _read_file_for_mention=_read_file_for_mention,
+                session=session,
+                run_role=run_role,
+                run_gemini=run_gemini,
+                config_sources=config_sources,
+                plan_ttl_hours=settings.plan_ttl_hours,
+            )
+
+            # Task pipeline registry (PDF, plan slash, CI-fix prep)
+            _pdf_timeout = max(
+                settings.pdf_timeout_sec,
+                int(os.environ.get("CLOGEM_PDF_TIMEOUT_SEC", "180")),
+            )
+
+            async def _pdf_run_gemini(prompt: str, status_msg: str):
+                return await run_gemini(prompt, status_msg, llm_timeout_sec=_pdf_timeout)
+
+            async def _pdf_run_role(role: str, prompt: str, status_msg: str):
+                return await run_role(role, prompt, status_msg, llm_timeout_sec=_pdf_timeout)
+
+            async def _pdf_runner(t: str) -> bool:
+                return await run_pdf_generation_pipeline(
+                    t,
+                    PdfPipelineDeps(
+                        run_gemini=_pdf_run_gemini,
+                        run_role=_pdf_run_role,
+                        console=console,
+                        Text=Text,
+                        MUTED=MUTED,
+                        TITLE=TITLE,
+                        LOG_WARN=LOG_WARN,
+                        LOG_ERR=LOG_ERR,
+                        LOG_OK=LOG_OK,
+                        section_rule=section_rule,
+                        cwd=os.getcwd(),
+                        timeout_sec=_pdf_timeout,
+                        _shlex_split_cmd=_shlex_split_cmd,
+                        _mention_roots_list=_mention_roots_list,
+                        _resolve_mention_path=_resolve_mention_path,
+                        _path_allowed_for_mention=_path_allowed_for_mention,
+                        _read_file_for_mention=_read_file_for_mention,
+                    ),
+                )
+
+            async def _plan_runner(t: str) -> bool:
+                from clogem.services.plan_pipeline import run_plan_slash_command as _run_plan
+                return await _run_plan(
+                    t, _repo_root(),
+                    console=console, Text=Text, MUTED=MUTED, LOG_OK=LOG_OK,
+                    section_rule=section_rule, run_role=run_role,
+                    ttl_hours=settings.plan_ttl_hours,
+                )
+
+            async def _ci_fix_prep(t: str):
+                ok, logs = await asyncio.to_thread(_fetch_ci_logs, _repo_root())
+                if ok and logs.strip():
+                    return f"## CI logs\n\n{logs}\n\n"
+                return None
+
+            _pipeline_handled, _ci_ctx = await _run_task_pipelines(
                 task,
-                CommandContext(
-                    console=console,
-                    Text=Text,
-                    MUTED=MUTED,
-                    TITLE=TITLE,
-                    LOG_WARN=LOG_WARN,
-                    LOG_ERR=LOG_ERR,
-                    LOG_OK=LOG_OK,
-                    section_rule=section_rule,
-                    models=models,
-                    _codex_model=_codex_model,
-                    _gemini_model=_gemini_model,
-                    _claude_model=_claude_model,
-                    role_provider_map=role_provider_map,
-                    settings=settings,
-                    _repo_root=_repo_root,
-                    _select_test_cmd=_select_test_cmd,
-                    _select_lint_cmd=_select_lint_cmd,
-                    _run_local_command=_run_local_command,
-                    _parse_github_repo_ref=_parse_github_repo_ref,
-                    _github_repo_info=_github_repo_info,
-                    ensure_run_permissions=ensure_run_permissions,
-                    run_permissions=run_permissions,
-                    _run_with_ascii_progress=_run_with_ascii_progress,
-                    _run_proc=_run_proc,
-                    _shlex_split_cmd=_shlex_split_cmd,
-                    _mention_roots_list=_mention_roots_list,
-                    _resolve_mention_path=_resolve_mention_path,
-                    _path_allowed_for_mention=_path_allowed_for_mention,
-                    _read_file_for_mention=_read_file_for_mention,
-                ),
+                pdf_runner=_pdf_runner,
+                plan_runner=_plan_runner,
+                ci_fix_prep=_ci_fix_prep,
+            )
+            if _pipeline_handled:
+                if _single_run_mode:
+                    break
+                continue
+
+            # Sync slash commands (model, roles, config, repo/info, test, lint, run, etc.)
+            handled, should_exit = await asyncio.to_thread(
+                handle_pre_pipeline_command, task, _cmd_ctx
             )
             if should_exit:
                 break
             if handled:
+                if _single_run_mode:
+                    break
+                continue
+
+            # Async slash commands (diff, branch, commit, pr, plan, rag/status)
+            _async_handled, _async_exit = await _handle_async_commands(task, _cmd_ctx)
+            if _async_exit:
+                break
+            if _async_handled:
+                if _single_run_mode:
+                    break
                 continue
 
             task, session_directive = parse_session_directive(task)
@@ -3004,6 +3210,10 @@ Return project edits as:
                     )
                 )
                 console.print()
+
+            # Prepend CI logs context if available from pipeline registry
+            if _ci_ctx:
+                task_clean = _ci_ctx + (task_clean or "")
 
             session_tokens["codex"] = 0
             session_tokens["gemini"] = 0
@@ -3224,34 +3434,35 @@ Return project edits as:
                 continue
 
             router_hint = ROUTER_DIRECTIVE_HINTS.get(session_directive or "", "")
-            route = await resolve_turn_mode(
-                TurnModeRequest(
-                    session_directive=session_directive,
-                    task_clean=task_clean,
-                    mem_block=mem_block,
-                    router_hint=router_hint,
-                ),
-                TurnModeDeps(
-                    build_router_prompt=build_router_prompt,
-                    run_codex=lambda prompt, status: run_role("orchestrator", prompt, status),
-                    runtime_stitch_capabilities_block=runtime_stitch_capabilities_block,
-                    runtime_clogem_commands_capabilities_block=runtime_clogem_commands_capabilities_block,
-                    detect_stitch_frontend_heavy_task=detect_stitch_frontend_heavy_task,
-                    detect_prerequisite_first_task=detect_prerequisite_first_task,
-                    build_prerequisite_first_prompt=build_prerequisite_first_prompt,
-                    secondary_intent_classifier=classify_intent_secondary,
-                ),
-                TurnModeUI(
-                    trace_doing=trace_doing,
-                    trace_done=trace_done,
-                    say=_say,
-                    console=console,
-                    text_factory=Text,
-                    log_err_style=LOG_ERR,
-                    muted_style=MUTED,
-                    token_turn_footer=_token_turn_footer,
-                ),
-            )
+            with _stage("router", provider=role_provider_map.get("orchestrator", "codex")):
+                route = await resolve_turn_mode(
+                    TurnModeRequest(
+                        session_directive=session_directive,
+                        task_clean=task_clean,
+                        mem_block=mem_block,
+                        router_hint=router_hint,
+                    ),
+                    TurnModeDeps(
+                        build_router_prompt=build_router_prompt,
+                        run_codex=lambda prompt, status: run_role("orchestrator", prompt, status),
+                        runtime_stitch_capabilities_block=runtime_stitch_capabilities_block,
+                        runtime_clogem_commands_capabilities_block=runtime_clogem_commands_capabilities_block,
+                        detect_stitch_frontend_heavy_task=detect_stitch_frontend_heavy_task,
+                        detect_prerequisite_first_task=detect_prerequisite_first_task,
+                        build_prerequisite_first_prompt=build_prerequisite_first_prompt,
+                        secondary_intent_classifier=classify_intent_secondary,
+                    ),
+                    TurnModeUI(
+                        trace_doing=trace_doing,
+                        trace_done=trace_done,
+                        say=_say,
+                        console=console,
+                        text_factory=Text,
+                        log_err_style=LOG_ERR,
+                        muted_style=MUTED,
+                        token_turn_footer=_token_turn_footer,
+                    ),
+                )
             if route.stop_turn:
                 continue
             mode = route.mode
@@ -3500,12 +3711,17 @@ Return project edits as:
                         + (plan_raw or "").strip()[:4000]
                         + "\n"
                     )
-                raw, draft_err, draft_rc = await run_role(
-                    "coder",
-                    f"{visual_spec_block}{mem_block}{attach_block}{auto_context_block}{symbol_dep_context_block}{stitch_block}{stitch_rules_extra}{mode_hint}{planner_block}{CODEX_RULES}{CODEX_PATCH_RULES}"
-                    f"{tdd_extra_hint}\n\nTASK:\n{task_clean}\n",
-                    "Coder: drafting initial implementation...",
-                )
+                # Inject MCP context and fresh plan block into build prompt
+                _mcp_ctx_block = _gather_mcp_context(task_clean or "", settings)
+                _plan_ctx_block = _read_plan_block(_repo_root(), settings.plan_ttl_hours)
+                with _stage("draft", provider=role_provider_map.get("coder", "codex")):
+                    raw, draft_err, draft_rc = await run_role(
+                        "coder",
+                        f"{_mcp_ctx_block}{_plan_ctx_block}{visual_spec_block}{mem_block}{attach_block}{auto_context_block}{symbol_dep_context_block}{stitch_block}{stitch_rules_extra}{mode_hint}{planner_block}{CODEX_RULES}{CODEX_PATCH_RULES}"
+                        f"{tdd_extra_hint}\n\nTASK:\n{task_clean}\n",
+                        "Coder: drafting initial implementation...",
+                        llm_timeout_sec=settings.build_timeout_sec,
+                    )
                 if draft_rc != 0:
                     trace_done(
                         "Codex draft failed; no diff/FILE output to continue with."
@@ -4022,6 +4238,15 @@ NEW:
                 console.print()
                 console.print(Text("Goodbye.", style=TITLE))
                 raise SystemExit(0) from None
+        finally:
+            if _turn_started:
+                _tr = _end_turn()
+                _trace_path = _write_last_turn(_tr, settings.log_dir)
+                _turn_started = False
+                if _single_run_mode:
+                    if _single_run_json_trace and _trace_path:
+                        console.print(Text(f"[clogem] trace: {_trace_path}", style=MUTED))
+                    raise SystemExit(0 if (_tr and _tr.success) else 1)
 
 
 def main() -> None:

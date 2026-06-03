@@ -3,8 +3,7 @@ from __future__ import annotations
 import os
 import subprocess
 import json
-import re
-from typing import Tuple
+from typing import Optional, Tuple
 
 from clogem.services.contracts import CommandContext
 
@@ -25,22 +24,6 @@ def handle_pre_pipeline_command(task: str, ctx: CommandContext) -> Tuple[bool, b
     LOG_ERR = ctx.LOG_ERR
     LOG_OK = ctx.LOG_OK
     section_rule = ctx.section_rule
-
-    # Guardrail: if the user asks for a PDF in natural language, prefer the
-    # explicit /pdf command instead of entering the build pipeline.
-    # This reduces misrouting/hallucinated "build a website" behavior.
-    if not task.lstrip().startswith("/"):
-        if re.match(r"(?is)^(generate|create|make)\s+(a\s+)?pdf\b", task.strip()):
-            console.print(
-                Text(
-                    "To generate a PDF, use the explicit command:\n"
-                    "  /pdf <text> [out.pdf]\n"
-                    "  /pdf @path/to/file.txt [out.pdf]",
-                    style=MUTED,
-                )
-            )
-            console.print()
-            return True, False
 
     if task.strip().lower() in ("/exit", "/quit"):
         console.print()
@@ -212,6 +195,10 @@ def handle_pre_pipeline_command(task: str, ctx: CommandContext) -> Tuple[bool, b
             payload = settings.as_dict() if hasattr(settings, "as_dict") else dict(settings)
         except Exception:
             payload = {"error": "Could not serialize settings"}
+        sources = getattr(ctx, "config_sources", None) or []
+        if sources:
+            console.print(Text(f"Sources: {', '.join(sources)}", style=MUTED))
+            console.print()
         console.print(json.dumps(payload, ensure_ascii=False, indent=2))
         console.print()
         return True, False
@@ -604,83 +591,167 @@ def handle_pre_pipeline_command(task: str, ctx: CommandContext) -> Tuple[bool, b
                 break
         return True, False
 
-    if task.startswith("/pdf"):
-        rest = task[len("/pdf") :].strip()
-        if not rest:
-            console.print(
-                Text(
-                    "Usage: /pdf <text> [out.pdf]  OR  /pdf @path/to/file.txt [out.pdf]",
-                    style=MUTED,
-                )
-            )
-            console.print()
+    return False, False
+
+
+async def handle_async_pipeline_command(
+    task: str,
+    ctx: CommandContext,
+) -> Tuple[bool, bool]:
+    """
+    Handle slash commands that need async/await (git workflow, plan, rag/status).
+
+    Returns:
+    - handled: command matched and was handled
+    - should_exit: caller should break the REPL loop
+    """
+    console = ctx.console
+    Text = ctx.Text
+    MUTED = ctx.MUTED
+    TITLE = ctx.TITLE
+    LOG_WARN = ctx.LOG_WARN
+    LOG_ERR = ctx.LOG_ERR
+    LOG_OK = ctx.LOG_OK
+    section_rule = ctx.section_rule
+
+    repo_root = ctx._repo_root()
+    session = ctx.session
+    run_role = ctx.run_role
+    settings = ctx.settings
+
+    if task.strip().lower() == "/diff":
+        from clogem.git_workflow import git_diff_written
+
+        written = list(session.written_files) if session is not None else []
+        rc, out, err = git_diff_written(repo_root, written)
+        section_rule("Diff (written files)")
+        console.print()
+        console.print(out.strip() or "(no diff)")
+        if rc != 0 and (err or "").strip():
+            console.print(Text((err or "").strip()[:1200], style=LOG_WARN))
+        console.print()
+        return True, False
+
+    if task.strip().lower().startswith("/branch "):
+        from clogem.git_workflow import create_branch
+
+        name = task.strip()[len("/branch "):].strip()
+        if not name:
+            console.print(Text("Usage: /branch <name>", style=MUTED))
             return True, False
-        tokens = ctx._shlex_split_cmd(rest)
-        if not tokens:
-            console.print(Text("Usage: /pdf <text> [out.pdf]", style=MUTED))
-            console.print()
+        ok, msg = create_branch(repo_root, name)
+        console.print(Text(msg, style=LOG_OK if ok else LOG_WARN))
+        console.print()
+        return True, False
+
+    if task.strip().lower() == "/commit":
+        from clogem.git_workflow import git_diff_written, git_commit
+
+        if run_role is None:
+            console.print(Text("/commit requires run_role to be wired.", style=LOG_WARN))
             return True, False
-        desired_out = None
-        if len(tokens) >= 2 and tokens[-1].lower().endswith(".pdf"):
-            desired_out = tokens[-1]
-            content_tokens = tokens[:-1]
-        else:
-            content_tokens = tokens
-        body = ""
-        if (
-            len(content_tokens) == 1
-            and content_tokens[0].startswith("@")
-            and not content_tokens[0].startswith("@@")
-        ):
-            rel = content_tokens[0][1:]
-            roots = ctx._mention_roots_list()
-            abs_p = ctx._resolve_mention_path(rel)
-            if not abs_p or not ctx._path_allowed_for_mention(abs_p, roots):
-                console.print(
-                    Text(f"Could not read @ mention: {content_tokens[0]}", style=LOG_WARN)
-                )
+
+        written = list(session.written_files) if session is not None else []
+        _rc, diff_out, _err = git_diff_written(repo_root, written)
+        diff_preview = (diff_out or "").strip()[:4000] or "(no diff)"
+
+        commit_prompt = (
+            "You are drafting a git commit message following conventional commits.\n"
+            "Format: <type>(<scope>): <subject> (imperative, no period, <50 chars)\n"
+            "Optional body: explain WHY (wrap at 72 chars).\n"
+            "Required footer: Refs #<issue> or Closes #<issue>.\n"
+            "No AI attribution. No Co-Authored-By.\n\n"
+            f"Diff:\n{diff_preview}\n\n"
+            "Return ONLY the commit message, nothing else."
+        )
+        commit_msg_raw, _cerr, crc = await run_role(
+            "summariser", commit_prompt, "Summariser: drafting commit message..."
+        )
+        commit_msg = (commit_msg_raw or "").strip()
+        if crc != 0 or not commit_msg:
+            console.print(Text("Could not draft commit message.", style=LOG_WARN))
+            return True, False
+
+        section_rule("Proposed commit message")
+        console.print()
+        console.print(commit_msg)
+        console.print()
+
+        auto_yes = session is not None and getattr(session, "run_auto_yes", False)
+        if not auto_yes:
+            try:
+                confirm = (console.input("Commit with this message? [y/N]: ") or "").strip().lower()
+            except Exception:
+                confirm = "n"
+            if confirm not in ("y", "yes"):
+                console.print(Text("Commit cancelled.", style=MUTED))
                 console.print()
                 return True, False
-            try:
-                max_b = max(
-                    4096, int(os.environ.get("CLOGEM_AT_MAX_FILE_BYTES", "400000"))
-                )
-            except ValueError:
-                max_b = 400000
-            body = ctx._read_file_for_mention(abs_p, max_b)
-        else:
-            body = " ".join(content_tokens).strip()
-        if not body:
-            console.print(Text("No PDF content provided.", style=LOG_WARN))
-            console.print()
-            return True, False
-        from clogem.pdf_tools import generate_pdf_from_text, pdf_path_for_text_request
 
-        final_path, display_name = pdf_path_for_text_request(os.getcwd(), desired_out)
-        roots = ctx._mention_roots_list()
-        final_abs = os.path.realpath(final_path)
-        if not any(
-            final_abs == os.path.realpath(r)
-            or final_abs.startswith(os.path.realpath(r) + os.sep)
-            for r in roots
-        ):
-            console.print(
-                Text(
-                    "Refusing to write PDF outside the allowed workspace.", style=LOG_WARN
-                )
-            )
-            console.print()
-            return True, False
-        try:
-            generate_pdf_from_text(body, final_path)
-        except Exception as e:
-            console.print(Text(f"PDF generation failed: {e}", style=LOG_ERR))
-            console.print()
-            return True, False
+        ok, out = git_commit(repo_root, commit_msg)
+        console.print(Text(out, style=LOG_OK if ok else LOG_ERR))
         console.print()
-        section_rule("PDF generated")
-        console.print(Text(f"Wrote: {display_name}", style=LOG_OK))
-        console.print(Text("Generated PDFs are plain-text layout PDFs.", style=MUTED))
+        return True, False
+
+    if task.strip().lower() == "/pr":
+        from clogem.git_workflow import create_pull_request
+
+        if run_role is None:
+            console.print(Text("/pr requires run_role to be wired.", style=LOG_WARN))
+            return True, False
+
+        pr_prompt = (
+            "Write a GitHub pull request description in markdown.\n"
+            "Sections: ## Summary (3 bullet max), ## Test plan.\n"
+            "Be concise. First line is the PR title (no markdown).\n"
+            "Return title on first line, then blank line, then body."
+        )
+        pr_raw, _perr, prc = await run_role(
+            "summariser", pr_prompt, "Summariser: drafting PR description..."
+        )
+        if prc != 0 or not (pr_raw or "").strip():
+            console.print(Text("Could not draft PR description.", style=LOG_WARN))
+            return True, False
+
+        lines = (pr_raw or "").strip().splitlines()
+        title = lines[0].strip() if lines else "feat: changes"
+        body = "\n".join(lines[2:]).strip() if len(lines) > 2 else ""
+
+        ok, out = create_pull_request(repo_root, title, body)
+        console.print()
+        console.print(Text(out, style=LOG_OK if ok else LOG_ERR))
+        console.print()
+        return True, False
+
+    if task.strip().lower().startswith("/plan"):
+        from clogem.services.plan_pipeline import run_plan_slash_command
+
+        if run_role is None:
+            console.print(Text("/plan requires run_role to be wired.", style=LOG_WARN))
+            return True, False
+
+        ttl = getattr(settings, "plan_ttl_hours", ctx.plan_ttl_hours) if settings else ctx.plan_ttl_hours
+        handled = await run_plan_slash_command(
+            task,
+            repo_root,
+            console=console,
+            Text=Text,
+            MUTED=MUTED,
+            LOG_OK=LOG_OK,
+            section_rule=section_rule,
+            run_role=run_role,
+            ttl_hours=ttl,
+        )
+        return handled, False
+
+    if task.strip().lower() == "/rag/status":
+        from clogem.vector_index import get_index_status
+
+        status = get_index_status(repo_root)
+        section_rule("RAG / vector index status")
+        console.print()
+        for k, v in status.items():
+            console.print(Text(f"  {k}: {v}", style=MUTED))
         console.print()
         return True, False
 

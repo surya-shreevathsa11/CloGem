@@ -119,3 +119,9 @@ class CommandContext:
     _resolve_mention_path: Callable[[str], Optional[str]]
     _path_allowed_for_mention: Callable[[str, Any], bool]
     _read_file_for_mention: Callable[[str], str]
+    # Extended fields for async commands (optional for backwards compat)
+    session: Any = None
+    run_role: Optional[Callable[..., Awaitable[Tuple[str, str, int]]]] = None
+    run_gemini: Optional[Callable[..., Awaitable[Tuple[str, str, int]]]] = None
+    config_sources: Optional[Any] = None
+    plan_ttl_hours: int = 48

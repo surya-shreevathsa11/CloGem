@@ -17,6 +17,7 @@ Disambiguation (important):
 - "What should I learn next?" → CHAT. "Add auth to my app" → BUILD.
 - If they paste code and ask "is this correct?" or "find the bug" → BUILD (they need engineering help on code).
 - If ambiguous and they might need code changes, prefer BUILD.
+- Requests to generate, create, or export a PDF document (e.g. "generate a PDF", "create a PDF report", "export as PDF") → treat as CHAT/non-build. Clogem handles PDF generation separately via its built-in PDF pipeline.
 
 Ordered / multi-part requests (critical — read carefully):
 - If the user asks for INFORMATION, SETUP, or HOW-TO *before* implementation (e.g. "before that tell me how…", "first explain how…", "I need to know X before we build Y", "build a site but first how do I connect…"), route as **CHAT** for this turn. Answer the prerequisite in the CHAT reply. They can run a build in a later message.
@@ -338,4 +339,62 @@ def build_gemini_review_prompt(context_block: str, code_text: str) -> str:
     return (
         GEMINI_REVIEW_PROMPT.replace("__CONTEXT__", context_block or "")
         .replace("__CODE__", code_text or "")
+    )
+
+
+PDF_GEMINI_DRAFT_PROMPT = """You are drafting the body of a plain-text PDF document.
+
+Rules (CRITICAL — ReportLab renders plain text, NOT HTML or Markdown):
+- Output ONLY plain text. No markdown fences (no ```, no **bold**, no # headings).
+- Separate paragraphs with a single blank line.
+- No HTML tags, no bullet symbols that aren't plain ASCII hyphens (-).
+- No preamble like "Here is the document:" — start with the document body directly.
+- Write complete, well-structured content appropriate for a professional PDF.
+
+User request:
+---
+__REQUEST__
+---
+
+Source content (if provided — incorporate and format it):
+---
+__SOURCE__
+---
+"""
+
+PDF_REVIEWER_PROMPT = """You are reviewing a draft PDF document body for completeness and formatting.
+
+The output will be rendered by ReportLab as plain text. Apply these checks:
+- Is the content complete and addresses the user's request?
+- Are paragraphs separated by blank lines?
+- Is there any stray markdown (```, **, ##) that would appear literally in the PDF?
+- Is the text well-structured and professional?
+
+If the draft is good, output the revised (or identical) full plain-text body only.
+Start immediately with the document body — no preamble, no "APPROVED" prefix, no fences.
+Strip any markdown fences or HTML if present.
+
+User request:
+---
+__REQUEST__
+---
+
+Draft body to review:
+---
+__DRAFT__
+---
+"""
+
+
+def build_pdf_gemini_draft_prompt(user_request: str, source_content: str) -> str:
+    return (
+        PDF_GEMINI_DRAFT_PROMPT.replace("__REQUEST__", user_request or "")
+        .replace("__SOURCE__", source_content or "(none)")
+    )
+
+
+def build_pdf_reviewer_prompt(user_request: str, draft: str) -> str:
+    return (
+        PDF_REVIEWER_PROMPT.replace("__REQUEST__", user_request or "")
+        .replace("__DRAFT__", draft or "")
     )

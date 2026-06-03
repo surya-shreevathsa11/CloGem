@@ -13,3 +13,7 @@ memory.json
 
 # Vector index (local, rebuilt per machine)
 .clogem/
+
+# Default PDF output from /pdf or natural-language PDF requests (cwd artifacts)
+clogem-output.pdf
+clogem-output_*.pdf
