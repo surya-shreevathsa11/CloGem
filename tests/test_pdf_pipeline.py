@@ -79,7 +79,8 @@ def _make_deps(
 
     def _shlex(raw: str) -> List[str]:
         import shlex
-        return shlex.split(raw)
+
+        return shlex.split(raw, posix=os.name != "nt")
 
     def _mention_roots() -> List[str]:
         return [cwd]

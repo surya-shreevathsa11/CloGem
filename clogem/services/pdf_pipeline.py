@@ -52,11 +52,17 @@ def _parse_slash_pdf_body(task: str, deps: PdfPipelineDeps) -> Tuple[str, Option
         return "", None
 
     desired_out: Optional[str] = None
+    content_tokens = tokens
     if len(tokens) >= 2 and tokens[-1].lower().endswith(".pdf"):
         desired_out = tokens[-1]
         content_tokens = tokens[:-1]
     else:
-        content_tokens = tokens
+        # Fallback: absolute/quoted paths on Windows may not survive shlex as one token.
+        m = re.search(r"""['"]?([^'"\s]+\.pdf)['"]?\s*$""", rest, re.I)
+        if m:
+            desired_out = m.group(1).strip("'\"")
+            prefix = rest[: m.start()].strip()
+            content_tokens = deps._shlex_split_cmd(prefix) if prefix else []
 
     body = ""
     if (

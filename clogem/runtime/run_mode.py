@@ -3,6 +3,9 @@ from __future__ import annotations
 import sys
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
 
+# Legacy helper; production `clogem run` uses the full REPL turn path via
+# `_single_run_mode` in `clogem.cli.async_main`.
+
 
 async def run_one_turn(
     task: str,
@@ -22,10 +25,6 @@ async def run_one_turn(
     json_trace: bool = False,
     verbose: bool = False,
 ) -> int:
-"""
-Legacy helper; production `clogem run` uses the full REPL turn path via
-``_single_run_mode`` in ``clogem.cli.async_main``. Kept for tests/extensions.
-"""
     import asyncio
     from clogem.turn_trace import begin_turn, end_turn, write_last_turn
 
