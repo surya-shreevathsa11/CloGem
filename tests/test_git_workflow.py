@@ -133,8 +133,19 @@ def test_git_commit_rejects_empty_message():
 
 
 def test_gh_available_returns_bool():
-    result = gh_available()
-    assert isinstance(result, bool)
+    with patch("clogem.git_workflow.subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0)
+        assert gh_available() is True
+        mock_run.return_value = MagicMock(returncode=1)
+        assert gh_available() is False
+
+
+def test_gh_available_false_on_timeout():
+    with patch("clogem.git_workflow.subprocess.run") as mock_run:
+        import subprocess
+
+        mock_run.side_effect = subprocess.TimeoutExpired(cmd=["gh"], timeout=5)
+        assert gh_available() is False
 
 
 def test_fetch_issue_context_no_gh():

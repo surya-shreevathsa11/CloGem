@@ -132,10 +132,10 @@ def gh_available() -> bool:
             ["gh", "--version"],
             capture_output=True,
             text=True,
-            timeout=15,
+            timeout=5,
         )
         return proc.returncode == 0
-    except OSError:
+    except (OSError, subprocess.TimeoutExpired):
         return False
 
 
