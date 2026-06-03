@@ -1,6 +1,7 @@
 """Unit tests for clogem/services/pdf_pipeline.py."""
 from __future__ import annotations
 
+import asyncio
 import os
 from typing import Any, List, Optional
 from unittest.mock import AsyncMock, MagicMock
@@ -129,89 +130,78 @@ def _make_deps(
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_pipeline_natural_language_creates_pdf(tmp_path):
+def test_pipeline_natural_language_creates_pdf(tmp_path):
     deps = _make_deps(tmp_path)
     task = "generate a pdf about cats"
 
-    handled = await run_pdf_generation_pipeline(task, deps)
+    handled = asyncio.run(run_pdf_generation_pipeline(task, deps))
 
     assert handled is True
-    # PDF file should exist in tmp_path
     pdfs = list(tmp_path.glob("*.pdf"))
     assert len(pdfs) == 1, f"Expected 1 PDF, found: {pdfs}"
 
 
-@pytest.mark.asyncio
-async def test_pipeline_slash_pdf_creates_pdf(tmp_path):
+def test_pipeline_slash_pdf_creates_pdf(tmp_path):
     deps = _make_deps(tmp_path)
     task = "/pdf This is some content for the PDF"
 
-    handled = await run_pdf_generation_pipeline(task, deps)
+    handled = asyncio.run(run_pdf_generation_pipeline(task, deps))
 
     assert handled is True
     pdfs = list(tmp_path.glob("*.pdf"))
     assert len(pdfs) == 1
 
 
-@pytest.mark.asyncio
-async def test_pipeline_slash_pdf_with_explicit_output_name(tmp_path):
+def test_pipeline_slash_pdf_with_explicit_output_name(tmp_path):
     deps = _make_deps(tmp_path)
     out_name = str(tmp_path / "myreport.pdf")
     task = f"/pdf Some content {out_name}"
 
-    handled = await run_pdf_generation_pipeline(task, deps)
+    handled = asyncio.run(run_pdf_generation_pipeline(task, deps))
 
     assert handled is True
     assert os.path.exists(out_name)
 
 
-@pytest.mark.asyncio
-async def test_pipeline_returns_true_on_gemini_failure(tmp_path):
+def test_pipeline_returns_true_on_gemini_failure(tmp_path):
     deps = _make_deps(tmp_path, gemini_return=("", "Gemini error", 1))
     task = "generate a pdf about dogs"
 
-    handled = await run_pdf_generation_pipeline(task, deps)
+    handled = asyncio.run(run_pdf_generation_pipeline(task, deps))
 
     assert handled is True
-    # No PDF should be created
     pdfs = list(tmp_path.glob("*.pdf"))
     assert len(pdfs) == 0
 
 
-@pytest.mark.asyncio
-async def test_pipeline_falls_back_to_draft_when_reviewer_fails(tmp_path):
+def test_pipeline_falls_back_to_draft_when_reviewer_fails(tmp_path):
     deps = _make_deps(tmp_path, reviewer_return=("", "Reviewer error", 1))
     task = "generate a pdf"
 
-    handled = await run_pdf_generation_pipeline(task, deps)
+    handled = asyncio.run(run_pdf_generation_pipeline(task, deps))
 
     assert handled is True
-    # Still creates PDF from draft
     pdfs = list(tmp_path.glob("*.pdf"))
     assert len(pdfs) == 1
 
 
-@pytest.mark.asyncio
-async def test_pipeline_slash_pdf_no_content_returns_true(tmp_path):
+def test_pipeline_slash_pdf_no_content_returns_true(tmp_path):
     deps = _make_deps(tmp_path)
     task = "/pdf"
 
-    handled = await run_pdf_generation_pipeline(task, deps)
+    handled = asyncio.run(run_pdf_generation_pipeline(task, deps))
 
     assert handled is True
-    # No PDF created (usage message printed)
     pdfs = list(tmp_path.glob("*.pdf"))
     assert len(pdfs) == 0
 
 
-@pytest.mark.asyncio
-async def test_pipeline_uses_reviewer_output(tmp_path):
+def test_pipeline_uses_reviewer_output(tmp_path):
     reviewer_body = "Reviewed content\n\nThis is paragraph two."
     deps = _make_deps(tmp_path, reviewer_return=(reviewer_body, "", 0))
     task = "generate a pdf"
 
-    handled = await run_pdf_generation_pipeline(task, deps)
+    handled = asyncio.run(run_pdf_generation_pipeline(task, deps))
 
     assert handled is True
     pdfs = list(tmp_path.glob("*.pdf"))

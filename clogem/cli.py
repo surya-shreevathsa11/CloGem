@@ -2449,7 +2449,13 @@ Return project edits as:
         return sorted(merged)
 
     task_prompt_session = None
-    if PromptSession is not None and Completer is not None and sys.stdin.isatty():
+    _cli_subcommand = getattr(_args, "subcommand", None)
+    if (
+        _cli_subcommand != "run"
+        and PromptSession is not None
+        and Completer is not None
+        and sys.stdin.isatty()
+    ):
 
         # Per-item styles stack with class:completion-menu.* (see prompt_toolkit layout/menus.py).
         _CMP = "fg:#5ccfff"
@@ -2635,18 +2641,23 @@ Return project edits as:
             except Exception:
                 pass
 
-        task_prompt_session = PromptSession(
-            completer=ClogemCompleter(),
-            history=InMemoryHistory(),
-            multiline=True,
-            complete_while_typing=True,
-            complete_style=CompleteStyle.COLUMN,
-            style=_completion_style,
-            color_depth=_cd,
-            reserve_space_for_menu=14,
-            prompt_continuation="  ... ",
-            key_bindings=_task_prompt_keys,
-        )
+        try:
+            task_prompt_session = PromptSession(
+                completer=ClogemCompleter(),
+                history=InMemoryHistory(),
+                multiline=True,
+                complete_while_typing=True,
+                complete_style=CompleteStyle.COLUMN,
+                style=_completion_style,
+                color_depth=_cd,
+                reserve_space_for_menu=14,
+                prompt_continuation="  ... ",
+                key_bindings=_task_prompt_keys,
+            )
+        except Exception:
+            # No TTY / headless CI (e.g. Windows runners): fall back to console.input
+            logger.debug("PromptSession unavailable; using plain input", exc_info=True)
+            task_prompt_session = None
 
     async def read_task_line(prompt: str = "What would you like to do? ") -> str:
         if task_prompt_session is not None:

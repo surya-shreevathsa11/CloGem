@@ -132,6 +132,7 @@ def _run_cli_run_subcommand(
         cwd=str(repo_root),
         env=env,
         timeout=60,
+        stdin=subprocess.DEVNULL,
     )
 
 
