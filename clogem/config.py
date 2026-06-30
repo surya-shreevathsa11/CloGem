@@ -81,6 +81,7 @@ class Settings:
     stitch_mcp_cmd: str = "npx"
     stitch_mcp_args: str = "-y stitch-mcp"
     stream_output: bool = True
+    god_mode: bool = False
     debug: bool = False
 
     @classmethod
@@ -212,6 +213,7 @@ class Settings:
                 os.environ.get("CLOGEM_STITCH_MCP_ARGS") or "-y stitch-mcp"
             ).strip(),
             stream_output=_as_bool(os.environ.get("CLOGEM_STREAM_OUTPUT"), True),
+            god_mode=_as_bool(os.environ.get("CLOGEM_GOD_MODE"), False),
             debug=_as_bool(
                 os.environ.get("CLOGEM_DEBUG") or os.environ.get("COGEM_DEBUG"), False
             ),

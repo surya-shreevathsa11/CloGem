@@ -177,6 +177,14 @@ async def async_main():
         action="store_true",
         help="Enable verbose (INFO) logging to stderr.",
     )
+    _ap.add_argument(
+        "--god-mode",
+        action="store_true",
+        help=(
+            "Auto-grant all permissions: passes --full-auto to Codex, --yolo to Gemini, "
+            "and allows local commands without prompting. Equivalent to CLOGEM_GOD_MODE=1."
+        ),
+    )
 
     _subparsers = _ap.add_subparsers(dest="subcommand")
     _run_sp = _subparsers.add_parser(
@@ -200,6 +208,8 @@ async def async_main():
         _cli_overrides["validation_docker"] = True
     if getattr(_args, "verbose", False):
         _cli_overrides["debug"] = True
+    if getattr(_args, "god_mode", False):
+        _cli_overrides["god_mode"] = True
     settings, config_sources = _load_settings(cwd=os.getcwd(), cli_overrides=_cli_overrides or None)
 
     loop = asyncio.get_running_loop()
@@ -259,6 +269,20 @@ async def async_main():
 
     console = Console()
 
+    if settings.god_mode:
+        from rich.rule import Rule
+        console.print()
+        console.print(Rule("[bold red]⚡ GOD MODE ACTIVE ⚡[/bold red]", style="bold red"))
+        console.print(
+            Text(
+                "All permissions auto-granted: Codex runs with --full-auto, Gemini with --yolo, "
+                "local commands enabled. No approval prompts will appear this session.",
+                style="bold yellow",
+            )
+        )
+        console.print(Rule(style="bold red"))
+        console.print()
+
     # --- Session state (shared across turns) ---
     from clogem.runtime.session import SessionState
     session = SessionState()
@@ -282,9 +306,12 @@ async def async_main():
     # Best-effort token totals per provider (parsed from CLI output when present).
     session_tokens = {"codex": 0, "gemini": 0, "claude": 0}
     # None = not asked yet; True/False = user chose whether to pass Codex --full-auto and Gemini --yolo.
-    auto_permissions: dict = {"granted": None}
+    auto_permissions: dict = {"granted": True if settings.god_mode else None}
     # None = not asked yet; True/False = user chose whether clogem can execute local shell commands (/run, /test, /lint, /github/clone).
-    run_permissions: dict = {"granted": None}
+    run_permissions: dict = {"granted": True if settings.god_mode else None}
+
+    if settings.god_mode:
+        session.run_auto_yes = True
     # Effective LLM IDs for this process (separate per backend); from CLI/env, change with /codex/model and /gemini/model.
     models: dict = {"codex": _codex_model, "gemini": _gemini_model, "claude": _claude_model}
 
@@ -4273,6 +4300,14 @@ def main() -> None:
     import asyncio
 
     asyncio.run(async_main())
+
+
+def god_mode_main() -> None:
+    """Entry point for `clogem-god-mode`: launches clogem with all permissions pre-granted."""
+    import os
+
+    os.environ["CLOGEM_GOD_MODE"] = "1"
+    main()
 
 
 if __name__ == "__main__":
