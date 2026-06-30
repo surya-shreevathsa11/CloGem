@@ -62,6 +62,7 @@ async def async_main():
         Style = None  # type: ignore
         ColorDepth = None  # type: ignore
 
+    from clogem.session_journal import SessionJournal
     from clogem.stitch import detect_stitch_frontend_heavy_task
     from clogem.stitch.adapters import looks_like_ui_content
     from clogem.task_intent import build_prerequisite_first_prompt, detect_prerequisite_first_task
@@ -196,6 +197,10 @@ async def async_main():
     _run_sp.add_argument("--issue", type=int, default=None, metavar="N", help="Link to GitHub issue N.")
     _run_sp.add_argument("--yes", action="store_true", help="Skip confirmation prompts.")
     _run_sp.add_argument("--json-trace", action="store_true", help="Print trace path on completion.")
+    _subparsers.add_parser(
+        "resume",
+        help="Pick a previous session to continue from (interactive session picker).",
+    )
 
     _args = _ap.parse_args()
     _codex_model = (_args.codex_model or os.environ.get("CLOGEM_CODEX_MODEL") or "").strip() or None
@@ -328,6 +333,11 @@ async def async_main():
     MEMORY_PATH = os.path.join(ROOT, "memory.json")
 
     memory_store = MemoryStore(MEMORY_PATH)
+
+    # Session journal — records tasks and written files for /resume
+    _journal = SessionJournal(ROOT)
+    _journal.begin_session()
+    _resume_context: Optional[str] = None  # set by /resume or `clogem resume`
 
     def load_memory():
         return memory_store.load()
@@ -3003,6 +3013,64 @@ Return project edits as:
     from clogem.mcp_context import gather_mcp_context as _gather_mcp_context
     from clogem.services.plan_pipeline import read_plan_block as _read_plan_block
 
+    # --- Resume picker (shared by `clogem resume` and `/resume` command) ---
+
+    def _run_resume_picker(journal, *, console, Text, Rule, MUTED, TITLE, BORDER) -> Optional[str]:
+        """
+        Show recent sessions and let the user pick one.
+        Returns the formatted resume context string or None if the user skips.
+        """
+        import datetime
+
+        sessions = journal.load_recent(n=10)
+        if not sessions:
+            console.print(Text("No previous sessions found.", style=MUTED))
+            return None
+
+        console.print()
+        console.print(Rule("[bold]Resume a previous session[/bold]", style=BORDER))
+        console.print()
+        for i, rec in enumerate(sessions, 1):
+            when = ""
+            if rec.started_at:
+                dt = datetime.datetime.fromtimestamp(rec.started_at)
+                when = dt.strftime("%Y-%m-%d %H:%M")
+            preview = rec.task_summary(max_tasks=2)
+            stats = rec.success_rate()
+            console.print(
+                Text(
+                    f"  [{i}] {when}  ({stats})\n      {preview}",
+                    style=MUTED,
+                )
+            )
+        console.print()
+        console.print(Text("Enter a number to resume, or press Enter to skip: ", style=TITLE), end="")
+        try:
+            choice = input().strip()
+        except (EOFError, KeyboardInterrupt):
+            console.print()
+            return None
+
+        if not choice:
+            console.print(Text("Skipping resume.", style=MUTED))
+            return None
+
+        try:
+            idx = int(choice) - 1
+            if not (0 <= idx < len(sessions)):
+                raise ValueError
+        except ValueError:
+            console.print(Text(f"Invalid choice '{choice}', skipping resume.", style=MUTED))
+            return None
+
+        ctx = SessionJournal.format_resume_context(sessions[idx])
+        console.print()
+        console.print(Rule("[bold green]Resuming session[/bold green]", style="green"))
+        console.print(Text(ctx, style=MUTED))
+        console.print(Rule(style="green"))
+        console.print()
+        return ctx
+
     # --- `clogem run <task>`: one full REPL turn then exit ---
     _single_run_mode = False
     _single_run_pending: Optional[str] = None
@@ -3041,6 +3109,18 @@ Return project edits as:
         _single_run_pending = _run_task_text
         _single_run_mode = True
 
+    # --- `clogem resume`: show session picker before entering the REPL ---
+    if getattr(_args, "subcommand", None) == "resume":
+        _resume_context = _run_resume_picker(
+            _journal,
+            console=console,
+            Text=Text,
+            Rule=Rule,
+            MUTED=MUTED,
+            TITLE=TITLE,
+            BORDER=BORDER,
+        )
+
     first_turn = True
     _turn_started = False
 
@@ -3049,6 +3129,8 @@ Return project edits as:
         try:
             memory = load_memory()
             mem_block = format_memory_for_prompt(memory)
+            if _resume_context:
+                mem_block = f"## Resume context\n{_resume_context}\n\n{mem_block}"
 
             if first_turn:
                 console.print(Rule(style=BORDER))
@@ -3223,6 +3305,19 @@ Return project edits as:
             if _pipeline_handled:
                 if _single_run_mode:
                     break
+                continue
+
+            # /resume — session picker
+            if task.strip().lower() in ("/resume",):
+                _resume_context = _run_resume_picker(
+                    _journal,
+                    console=console,
+                    Text=Text,
+                    Rule=Rule,
+                    MUTED=MUTED,
+                    TITLE=TITLE,
+                    BORDER=BORDER,
+                )
                 continue
 
             # Sync slash commands (model, roles, config, repo/info, test, lint, run, etc.)
@@ -4290,10 +4385,24 @@ NEW:
                 _tr = _end_turn()
                 _trace_path = _write_last_turn(_tr, settings.log_dir)
                 _turn_started = False
+                # Record this turn in the session journal for /resume
+                if task:
+                    _journal.record_turn(
+                        task,
+                        files_written=list(session.written_files),
+                        success=(_tr is None or _tr.success),
+                    )
                 if _single_run_mode:
                     if _single_run_json_trace and _trace_path:
                         console.print(Text(f"[clogem] trace: {_trace_path}", style=MUTED))
+                    _journal.close(memory_notes=format_memory_for_prompt(load_memory()))
                     raise SystemExit(0 if (_tr and _tr.success) else 1)
+
+    # Flush the journal when the REPL loop exits normally
+    try:
+        _journal.close(memory_notes=format_memory_for_prompt(load_memory()))
+    except Exception:
+        pass
 
 
 def main() -> None:
