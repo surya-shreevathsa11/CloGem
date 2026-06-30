@@ -19,6 +19,7 @@ All commands available in a `clogem` session, sorted alphabetically.
 | `clogem run --issue N <task>` | Link the run to GitHub issue N | Built-in subcommand flag |
 | `clogem run --json-trace <task>` | Print the trace file path after the run | Built-in subcommand flag |
 | `clogem run --task-file <path>` | Read task text from a file instead of inline | Built-in subcommand flag |
+| `clogem resume` | Open the session picker before entering the REPL — equivalent to typing `/resume` on the first turn | Built-in subcommand |
 | `clogem run --yes <task>` | Skip all confirmation prompts in non-interactive mode | Built-in subcommand flag |
 
 ---
@@ -35,6 +36,7 @@ Prefix your message with one of these to override how that turn is routed. They 
 | `/debug <task>` | Debugging and root-cause emphasis for this turn | Always available |
 | `/plan <task>` | Planning and milestones emphasis; write or update `.clogem/plan.md` | Always available; `run_role` must be wired (it is in the REPL) |
 | `/research <query>` | Research-style response; uses Gemini + Google Search when available | Always available |
+| `/resume` | Show a numbered list of recent sessions; pick one to load its context (tasks done, files written, memory snapshot) into the current session | Always available |
 
 ---
 
