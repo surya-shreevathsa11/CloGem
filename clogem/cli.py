@@ -71,14 +71,17 @@ async def async_main():
     from clogem.llm_clients import (
         claude_generate,
         claude_generate_async,
+        claude_stream_async,
         gemini_generate,
         gemini_generate_async,
+        gemini_stream_async,
         gemini_generate_with_google_search,
         gemini_generate_with_google_search_async,
         gemini_generate_with_image,
         gemini_generate_with_image_async,
         openai_generate,
         openai_generate_async,
+        openai_stream_async,
     )
     from clogem.role_mapping import needed_providers, resolve_role_provider_map
     from clogem.services.commands import handle_pre_pipeline_command
@@ -174,6 +177,14 @@ async def async_main():
         action="store_true",
         help="Enable verbose (INFO) logging to stderr.",
     )
+    _ap.add_argument(
+        "--god-mode",
+        action="store_true",
+        help=(
+            "Auto-grant all permissions: passes --full-auto to Codex, --yolo to Gemini, "
+            "and allows local commands without prompting. Equivalent to CLOGEM_GOD_MODE=1."
+        ),
+    )
 
     _subparsers = _ap.add_subparsers(dest="subcommand")
     _run_sp = _subparsers.add_parser(
@@ -197,6 +208,8 @@ async def async_main():
         _cli_overrides["validation_docker"] = True
     if getattr(_args, "verbose", False):
         _cli_overrides["debug"] = True
+    if getattr(_args, "god_mode", False):
+        _cli_overrides["god_mode"] = True
     settings, config_sources = _load_settings(cwd=os.getcwd(), cli_overrides=_cli_overrides or None)
 
     loop = asyncio.get_running_loop()
@@ -256,6 +269,20 @@ async def async_main():
 
     console = Console()
 
+    if settings.god_mode:
+        from rich.rule import Rule
+        console.print()
+        console.print(Rule("[bold red]⚡ GOD MODE ACTIVE ⚡[/bold red]", style="bold red"))
+        console.print(
+            Text(
+                "All permissions auto-granted: Codex runs with --full-auto, Gemini with --yolo, "
+                "local commands enabled. No approval prompts will appear this session.",
+                style="bold yellow",
+            )
+        )
+        console.print(Rule(style="bold red"))
+        console.print()
+
     # --- Session state (shared across turns) ---
     from clogem.runtime.session import SessionState
     session = SessionState()
@@ -279,9 +306,12 @@ async def async_main():
     # Best-effort token totals per provider (parsed from CLI output when present).
     session_tokens = {"codex": 0, "gemini": 0, "claude": 0}
     # None = not asked yet; True/False = user chose whether to pass Codex --full-auto and Gemini --yolo.
-    auto_permissions: dict = {"granted": None}
+    auto_permissions: dict = {"granted": True if settings.god_mode else None}
     # None = not asked yet; True/False = user chose whether clogem can execute local shell commands (/run, /test, /lint, /github/clone).
-    run_permissions: dict = {"granted": None}
+    run_permissions: dict = {"granted": True if settings.god_mode else None}
+
+    if settings.god_mode:
+        session.run_auto_yes = True
     # Effective LLM IDs for this process (separate per backend); from CLI/env, change with /codex/model and /gemini/model.
     models: dict = {"codex": _codex_model, "gemini": _gemini_model, "claude": _claude_model}
 
@@ -953,6 +983,44 @@ async def async_main():
         elapsed = time.monotonic() - t0
         await trace_done_async(f"DONE:  {label}  ({elapsed:.1f}s)")
         return out
+
+    async def _stream_sdk_response(
+        label: str,
+        provider: str,
+        gen_factory,
+    ) -> Tuple[str, str, int]:
+        """
+        Stream tokens from gen_factory() to stdout as they arrive.
+        Returns (full_text, error, returncode) — same shape as run_codex/run_gemini/run_claude.
+        Falls back gracefully: if the generator raises before any output, returns an error
+        result so the caller can try the non-streaming path.
+        """
+        import sys as _sys
+
+        _say(f"[clogem] START: {label}")
+        t0 = time.monotonic()
+        parts: List[str] = []
+        _sys.stdout.write("\n")
+        _sys.stdout.flush()
+        try:
+            async for chunk in gen_factory():
+                if chunk:
+                    _sys.stdout.write(chunk)
+                    _sys.stdout.flush()
+                    parts.append(chunk)
+        except Exception as exc:
+            _sys.stdout.write("\n")
+            _sys.stdout.flush()
+            elapsed = time.monotonic() - t0
+            _say(f"[clogem] DONE:  {label}  ({elapsed:.1f}s)")
+            return "", str(exc), 1
+        _sys.stdout.write("\n")
+        _sys.stdout.flush()
+        elapsed = time.monotonic() - t0
+        _say(f"[clogem] DONE:  {label}  ({elapsed:.1f}s)")
+        text = "".join(parts).strip()
+        _record_tokens(provider, text)
+        return text, "", 0
 
     async def run_cmd(
         cmd: List[str], status_msg: Optional[str] = None
@@ -1693,6 +1761,7 @@ async def async_main():
         status_msg: str,
         *,
         llm_timeout_sec: Optional[int] = None,
+        stream: bool = True,
     ) -> Tuple[str, str, int]:
         backend = settings.codex_backend
         sdk_model = (
@@ -1702,18 +1771,11 @@ async def async_main():
         )
         timeout = llm_timeout_sec or _subprocess_timeout_sec() or 60
 
-        # google-genai async client has shown intermittent cleanup crashes in some
-        # environments (`_async_httpx_client` missing). Keep grounded lookup on
-        # sync SDK path for stability.
-        use_async = False
         codex_cmd_parts = (
             _shlex_split_cmd(os.environ.get("CLOGEM_CODEX_CMD", "").strip()) or ["codex"]
         )
         codex_exe = codex_cmd_parts[0] if codex_cmd_parts else "codex"
         codex_cli_available = bool(shutil.which(codex_exe) or os.path.isfile(codex_exe))
-
-        async def _run_sdk_async():
-            return await openai_generate_async(prompt, sdk_model, timeout_sec=timeout)
 
         def _run_sdk_sync():
             return openai_generate(prompt, sdk_model, timeout_sec=timeout)
@@ -1725,29 +1787,22 @@ async def async_main():
 
         if should_try_sdk:
             try:
-                if use_async:
-                    if status_msg:
-                        r = await _run_with_ascii_progress_async(
-                            status_msg, _run_sdk_async
-                        )
-                    else:
-                        r = await _run_sdk_async()
-                    if r.returncode != 0:
-                        logger.debug(
-                            "Gemini async SDK call failed; retrying with sync SDK path. error=%s",
-                            r.error,
-                        )
-                        r = (
-                            _run_with_ascii_progress(status_msg, _run_sdk_sync)
-                            if status_msg
-                            else _run_sdk_sync()
-                        )
-                else:
-                    r = (
-                        _run_with_ascii_progress(status_msg, _run_sdk_sync)
-                        if status_msg
-                        else _run_sdk_sync()
+                if settings.stream_output and stream and status_msg:
+                    text, err, rc = await _stream_sdk_response(
+                        status_msg,
+                        "codex",
+                        lambda: openai_stream_async(prompt, sdk_model, timeout_sec=timeout),
                     )
+                    if rc == 0:
+                        return text, "", 0
+                    # Streaming failed; fall through to non-streaming SDK path.
+                    logger.debug("OpenAI streaming failed; falling back to non-streaming. error=%s", err)
+
+                r = (
+                    _run_with_ascii_progress(status_msg, _run_sdk_sync)
+                    if status_msg
+                    else _run_sdk_sync()
+                )
                 if r.returncode == 0:
                     _record_tokens("codex", r.text or "")
                     return r.text or "", "", 0
@@ -1767,6 +1822,7 @@ async def async_main():
         status_msg: str,
         *,
         llm_timeout_sec: Optional[int] = None,
+        stream: bool = True,
     ) -> Tuple[str, str, int]:
         backend = settings.gemini_backend
         sdk_model = (
@@ -1776,9 +1832,6 @@ async def async_main():
         )
         timeout = llm_timeout_sec or _subprocess_timeout_sec() or 60
 
-        # Keep Gemini on sync SDK path for stability. Some google-genai async
-        # client versions raise `_async_httpx_client` cleanup errors.
-        use_async = False
         gemini_cmd_parts = (
             _shlex_split_cmd(os.environ.get("CLOGEM_GEMINI_CMD", "").strip())
             or ["gemini"]
@@ -1787,9 +1840,6 @@ async def async_main():
         gemini_cli_available = bool(
             shutil.which(gemini_exe) or os.path.isfile(gemini_exe)
         )
-
-        async def _run_sdk_async():
-            return await gemini_generate_async(prompt, sdk_model, timeout_sec=timeout)
 
         def _run_sdk_sync():
             return gemini_generate(prompt, sdk_model, timeout_sec=timeout)
@@ -1800,43 +1850,27 @@ async def async_main():
 
         if should_try_sdk:
             try:
-                if use_async:
-                    if status_msg:
-                        r = await _run_with_ascii_progress_async(
-                            status_msg, _run_sdk_async
-                        )
-                    else:
-                        r = await _run_sdk_async()
-                else:
-                    r = (
-                        _run_with_ascii_progress(status_msg, _run_sdk_sync)
-                        if status_msg
-                        else _run_sdk_sync()
+                if settings.stream_output and stream and status_msg:
+                    text, err, rc = await _stream_sdk_response(
+                        status_msg,
+                        "gemini",
+                        lambda: gemini_stream_async(prompt, sdk_model, timeout_sec=timeout),
                     )
+                    if rc == 0:
+                        return text, "", 0
+                    logger.debug("Gemini streaming failed; falling back to non-streaming. error=%s", err)
+
+                r = (
+                    _run_with_ascii_progress(status_msg, _run_sdk_sync)
+                    if status_msg
+                    else _run_sdk_sync()
+                )
                 if r.returncode == 0:
                     _record_tokens("gemini", r.text or "")
                     return (r.text or "").strip(), "", 0
                 if backend == "sdk":
                     return "", r.error or "Gemini SDK call failed.", 1
             except Exception as e:
-                if use_async:
-                    logger.debug(
-                        "Gemini async SDK path raised; retrying with sync SDK path",
-                        exc_info=True,
-                    )
-                    try:
-                        r = (
-                            _run_with_ascii_progress(status_msg, _run_sdk_sync)
-                            if status_msg
-                            else _run_sdk_sync()
-                        )
-                        if r.returncode == 0:
-                            _record_tokens("gemini", r.text or "")
-                            return (r.text or "").strip(), "", 0
-                        if backend == "sdk":
-                            return "", r.error or "Gemini SDK call failed.", 1
-                    except Exception:
-                        logger.debug("Gemini sync fallback also failed", exc_info=True)
                 if backend == "sdk":
                     return "", str(e), 1
 
@@ -1940,6 +1974,7 @@ async def async_main():
         status_msg: str,
         *,
         llm_timeout_sec: Optional[int] = None,
+        stream: bool = True,
     ) -> Tuple[str, str, int]:
         backend = settings.claude_backend
         sdk_model = (
@@ -1948,10 +1983,6 @@ async def async_main():
             or "claude-sonnet-4-6"
         )
         timeout = llm_timeout_sec or _subprocess_timeout_sec() or 60
-        use_async = settings.async_llm
-
-        async def _run_sdk_async():
-            return await claude_generate_async(prompt, sdk_model, timeout_sec=timeout)
 
         def _run_sdk_sync():
             return claude_generate(prompt, sdk_model, timeout_sec=timeout)
@@ -1959,17 +1990,21 @@ async def async_main():
         if backend != "sdk":
             return "", "Claude backend supports SDK only.", 1
         try:
-            if use_async:
-                if status_msg:
-                    r = await _run_with_ascii_progress_async(status_msg, _run_sdk_async)
-                else:
-                    r = await _run_sdk_async()
-            else:
-                r = (
-                    _run_with_ascii_progress(status_msg, _run_sdk_sync)
-                    if status_msg
-                    else _run_sdk_sync()
+            if settings.stream_output and stream and status_msg:
+                text, err, rc = await _stream_sdk_response(
+                    status_msg,
+                    "claude",
+                    lambda: claude_stream_async(prompt, sdk_model, timeout_sec=timeout),
                 )
+                if rc == 0:
+                    return text, "", 0
+                logger.debug("Claude streaming failed; falling back to non-streaming. error=%s", err)
+
+            r = (
+                _run_with_ascii_progress(status_msg, _run_sdk_sync)
+                if status_msg
+                else _run_sdk_sync()
+            )
             if r.returncode == 0:
                 _record_tokens("claude", r.text or "")
                 return (r.text or "").strip(), "", 0
@@ -1983,14 +2018,15 @@ async def async_main():
         status_msg: str,
         *,
         llm_timeout_sec: Optional[int] = None,
+        stream: bool = True,
     ) -> Tuple[str, str, int]:
         provider = role_provider_map.get(role, "codex")
         if provider == "codex":
-            return await run_codex(prompt, status_msg, llm_timeout_sec=llm_timeout_sec)
+            return await run_codex(prompt, status_msg, llm_timeout_sec=llm_timeout_sec, stream=stream)
         if provider == "gemini":
-            return await run_gemini(prompt, status_msg, llm_timeout_sec=llm_timeout_sec)
+            return await run_gemini(prompt, status_msg, llm_timeout_sec=llm_timeout_sec, stream=stream)
         if provider == "claude":
-            return await run_claude(prompt, status_msg, llm_timeout_sec=llm_timeout_sec)
+            return await run_claude(prompt, status_msg, llm_timeout_sec=llm_timeout_sec, stream=stream)
         return "", f"Unsupported provider for role {role}: {provider}", 1
 
     def extract_code(text):
@@ -3455,7 +3491,7 @@ Return project edits as:
                     ),
                     TurnModeDeps(
                         build_router_prompt=build_router_prompt,
-                        run_codex=lambda prompt, status: run_role("orchestrator", prompt, status),
+                        run_codex=lambda prompt, status: run_role("orchestrator", prompt, status, stream=False),
                         runtime_stitch_capabilities_block=runtime_stitch_capabilities_block,
                         runtime_clogem_commands_capabilities_block=runtime_clogem_commands_capabilities_block,
                         detect_stitch_frontend_heavy_task=detect_stitch_frontend_heavy_task,
@@ -4264,6 +4300,14 @@ def main() -> None:
     import asyncio
 
     asyncio.run(async_main())
+
+
+def god_mode_main() -> None:
+    """Entry point for `clogem-god-mode`: launches clogem with all permissions pre-granted."""
+    import os
+
+    os.environ["CLOGEM_GOD_MODE"] = "1"
+    main()
 
 
 if __name__ == "__main__":

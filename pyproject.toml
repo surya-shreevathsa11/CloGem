@@ -8,6 +8,10 @@ version = "0.1.0"
 description = "Clogem CLI: Codex + Gemini workflow with validation and repo awareness"
 readme = "README.md"
 requires-python = ">=3.10"
+authors = [
+  {name = "surya-shreevathsa11"},
+  {name = "Claude Sonnet", email = "noreply@anthropic.com"},
+]
 dependencies = [
   "rich>=10.0.0",
   "prompt_toolkit>=3.0.0",
@@ -33,6 +37,7 @@ dev = [
 
 [project.scripts]
 clogem = "clogem.cli:main"
+clogem-god-mode = "clogem.cli:god_mode_main"
 
 [tool.setuptools]
 include-package-data = true

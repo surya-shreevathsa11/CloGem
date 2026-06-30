@@ -6,7 +6,7 @@ import os
 import random
 import time
 from dataclasses import dataclass
-from typing import Any, Awaitable, Callable, Optional
+from typing import Any, AsyncGenerator, Awaitable, Callable, Optional
 
 from clogem.logging_utils import get_logger
 
@@ -343,6 +343,71 @@ async def claude_generate_async(
         lambda: asyncio.to_thread(claude_generate, prompt, model, timeout_sec),
         "claude_generate_async",
     )
+
+
+async def openai_stream_async(
+    prompt: str, model: str, timeout_sec: Optional[int] = None
+) -> AsyncGenerator[str, None]:
+    """Yield text chunks from OpenAI as they arrive. Raises on error."""
+    try:
+        from openai import AsyncOpenAI
+    except Exception as e:
+        raise RuntimeError(f"OpenAI SDK import failed: {e}") from e
+    client = AsyncOpenAI()
+    stream = await client.chat.completions.create(
+        model=model,
+        messages=[
+            {"role": "system", "content": "You are a precise coding assistant."},
+            {"role": "user", "content": prompt},
+        ],
+        stream=True,
+        timeout=timeout_sec or 60,
+    )
+    async for chunk in stream:
+        delta = chunk.choices[0].delta.content if chunk.choices else None
+        if delta:
+            yield delta
+
+
+async def gemini_stream_async(
+    prompt: str, model: str, timeout_sec: Optional[int] = None
+) -> AsyncGenerator[str, None]:
+    """Yield text chunks from Gemini as they arrive. Raises on error."""
+    try:
+        from google import genai
+    except Exception as e:
+        raise RuntimeError(f"Google GenAI SDK import failed: {e}") from e
+    client = genai.Client()
+    timeout_ms = int((timeout_sec or 60) * 1000)
+    async for chunk in client.aio.models.generate_content_stream(
+        model=model,
+        contents=prompt,
+        config={"http_options": {"timeout": timeout_ms}},
+    ):
+        text = getattr(chunk, "text", None) or ""
+        if text:
+            yield text
+
+
+async def claude_stream_async(
+    prompt: str, model: str, timeout_sec: Optional[int] = None
+) -> AsyncGenerator[str, None]:
+    """Yield text chunks from Claude as they arrive. Raises on error."""
+    try:
+        from anthropic import AsyncAnthropic
+    except Exception as e:
+        raise RuntimeError(f"Anthropic SDK import failed: {e}") from e
+    client = AsyncAnthropic()
+    async with client.messages.stream(
+        model=model,
+        max_tokens=4096,
+        system="You are a precise coding assistant.",
+        messages=[{"role": "user", "content": prompt}],
+        timeout=timeout_sec or 60,
+    ) as stream:
+        async for text in stream.text_stream:
+            if text:
+                yield text
 
 
 def _guess_mime_type_for_image_path(image_path: str) -> str:
