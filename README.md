@@ -63,7 +63,7 @@ Pure chat turns skip the code pipeline when the router says **CHAT**. Special ca
 | **Gemini** | `gemini …` (**CLI**) and/or **Google GenAI SDK** (`CLOGEM_GEMINI_BACKEND=auto\|sdk\|cli`) — review, summary, optional grounded “today” answers |
 | **Claude** | **Anthropic SDK only** (`CLOGEM_CLAUDE_BACKEND=sdk`) |
 
-In **`auto`**, Clogem prefers the SDK when keys are available and falls back to the CLIs. Set keys as needed: `OPENAI_API_KEY`, `GEMINI_API_KEY` or `GOOGLE_API_KEY`, `ANTHROPIC_API_KEY`.
+In **`auto`**, Clogem prefers the **CLI** when it is available and falls back to the SDK only if the CLI is not found. For Gemini, this means `auto` uses the `gemini` CLI path even when `GEMINI_API_KEY` is set — which fails for personal accounts whose CLI Google login is deprecated. **Individuals must set `CLOGEM_GEMINI_BACKEND=sdk`** and provide `GEMINI_API_KEY` or `GOOGLE_API_KEY`.
 
 ---
 
@@ -153,7 +153,7 @@ ai_automation/
 | **Node.js + npm** | Installs the **Codex** and **Gemini** CLIs globally (`@openai/codex`, `@google/gemini-cli`). |
 | **Codex CLI** (`codex`) | OpenAI Codex — drafting and orchestration (`codex exec …`). |
 | **Gemini CLI** (`gemini`) | Google Gemini — review and summaries (`gemini -p …`). Still useful as a CLI backend for enterprise / Code Assist setups. For **personal accounts**, the "Sign in with Google" flow on Gemini CLI is deprecated (June 2026); use an API key + SDK instead (see below). |
-| **API keys** | For **individuals**: `GEMINI_API_KEY` (from [AI Studio](https://aistudio.google.com/apikey)) is the recommended Gemini path — set `CLOGEM_GEMINI_BACKEND=sdk` (or `auto` when the key is present). Also: `OPENAI_API_KEY` for the Codex SDK path; optional `ANTHROPIC_API_KEY` for Claude roles. |
+| **API keys** | For **individuals**: `GEMINI_API_KEY` (from [AI Studio](https://aistudio.google.com/apikey)) is the recommended Gemini path — set `CLOGEM_GEMINI_BACKEND=sdk` (not `auto`; see below). Also: `OPENAI_API_KEY` for the Codex SDK path; optional `ANTHROPIC_API_KEY` for Claude roles. |
 
 On **Windows**, you can use **WSL** (below) or native installs if `python3`, `pipx`, `node`, `codex`, and `gemini` are on your `PATH`.
 
@@ -281,7 +281,7 @@ Reload the shell: `source ~/.zshrc`.
 |---------|------------|
 | `requires-python` / version error during `pipx install` | Use `--python` with **python3.10+** (see step 2). |
 | `command not found: clogem` after pipx | Run `pipx ensurepath`, restart Terminal, check `echo $PATH`. |
-| Live weather/news not grounded | Use Gemini **SDK** (`CLOGEM_GEMINI_BACKEND=auto` or `sdk`), not `cli`; set `GEMINI_API_KEY`. |
+| Live weather/news not grounded | Set `CLOGEM_GEMINI_BACKEND=sdk` (not `auto` — with the Gemini CLI installed, `auto` picks the CLI path and does not use the SDK key) and set `GEMINI_API_KEY`. |
 | npm `ENOTEMPTY` / rename error during `npm install -g @openai/codex` or `@google/gemini-cli` | Remove stuck directories and reinstall: `sudo rm -rf /usr/local/lib/node_modules/@openai/codex /usr/local/lib/node_modules/@openai/.codex-* /usr/local/lib/node_modules/@google/gemini-cli /usr/local/lib/node_modules/@google/.gemini-cli-*` then `sudo npm install -g @openai/codex @google/gemini-cli`. |
 | `unexpected argument '--full-auto'` from Codex CLI | Newer Codex CLIs (e.g. v0.147+) reject `--full-auto`. Set `CLOGEM_AUTO_PERMISSIONS=no` and avoid `clogem --god-mode` / `clogem-god-mode` until a code fix lands. If prompted for auto-permissions during a session, answer `n`. |
 | Codex 401 / `refresh_token_reused` error | Run `codex logout` then `codex login` to refresh credentials. |
@@ -411,12 +411,13 @@ npx @google/gemini-cli --help
 
 ```bash
 gemini --help
-gemini -p "hello"
 ```
+
+`gemini -p "hello"` can be used to confirm the CLI itself works (CLI-backend verification only). **Individuals using `CLOGEM_GEMINI_BACKEND=sdk` do not need the CLI to accept Google login** — Clogem will use the API key directly and the CLI sign-in step is not required.
 
 **Authentication:**
 
-- **Individuals (recommended):** Personal Google login on Gemini CLI is deprecated as of June 2026. Set `GEMINI_API_KEY` (get one at <https://aistudio.google.com/apikey>) and use `CLOGEM_GEMINI_BACKEND=sdk`. Do not rely on the Gemini CLI Google-login flow for personal accounts.
+- **Individuals (recommended):** Personal Google login on Gemini CLI is deprecated as of June 2026. Set `GEMINI_API_KEY` (get one at <https://aistudio.google.com/apikey>) and set `CLOGEM_GEMINI_BACKEND=sdk`. Do not rely on the Gemini CLI Google-login flow for personal accounts, and do not use `CLOGEM_GEMINI_BACKEND=auto` — with the CLI on `PATH`, `auto` routes through the CLI, not the SDK.
 - **Enterprise / paid CLI setups:** Gemini CLI may still work for Code Assist or API-key-authenticated CLI configurations. Clogem can use `CLOGEM_GEMINI_BACKEND=cli` when the `gemini` CLI is functional.
 
 See also the upstream [authentication guide](https://github.com/google-gemini/gemini-cli/blob/main/README.md#-authentication-options).
@@ -609,7 +610,7 @@ Clogem supports SDK backends for OpenAI, Google GenAI, and Anthropic.
 - `CLOGEM_GEMINI_SDK_MODEL` (default `gemini-2.5-flash`)
 - `CLOGEM_CLAUDE_SDK_MODEL` (default `claude-sonnet-4-6`)
 
-In `auto` mode, Clogem tries SDK first and falls back to CLI if unavailable.
+In `auto` mode, Clogem prefers the **CLI** when it is on `PATH` and falls back to SDK only if the CLI is unavailable. For Gemini, this means a working `gemini` CLI install takes precedence over `GEMINI_API_KEY` — individuals whose personal Google login is deprecated must set `CLOGEM_GEMINI_BACKEND=sdk` explicitly.
 For SDK mode you need:
 
 - OpenAI: `OPENAI_API_KEY`
