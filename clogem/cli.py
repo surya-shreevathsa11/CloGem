@@ -948,47 +948,88 @@ async def async_main():
             _sys.stdout.write("\r\x1b[2K" + ln + "\n")
         _sys.stdout.flush()
 
-    def _run_with_ascii_progress(label: str, fn):
-        """
-        ASCII spinner on stdout (no Unicode). Always visible vs Rich / braille.
-        """
+    _ACTIVITY_ROSE = "\033[38;2;190;85;85m"
+    _ACTIVITY_MUTED = "\033[38;2;168;138;138m"
+    _ACTIVITY_RESET = "\033[0m"
+    _ACTIVITY_FRAMES = ("✻", "✶", "✳", "✢")
+
+    def _activity_name(label: str) -> str:
+        name = (label or "working").split(":", 1)[0].strip() or "working"
+        if name.lower().startswith("orchestrator"):
+            return "Compiling"
+        return name[:1].upper() + name[1:]
+
+    def _activity_note(stderr: str, code: int) -> str:
+        text = stderr or ""
+        low = text.lower()
+        if "unknown variant" in low and "max" in low:
+            return "could not refresh models"
+        if "full-auto" in low or "sandbox workspace-write" in low:
+            return "permission flag rejected"
+        if "grounding" in low:
+            return "search unavailable"
+        for raw in text.splitlines():
+            line = raw.strip()
+            if not line or line.startswith("{") or line.startswith("["):
+                continue
+            if line.lower().startswith(("stderr:", "warning:", "error ")):
+                continue
+            if len(line) > 64:
+                line = line[:61] + "..."
+            return line
+        return "did not finish" if code else ""
+
+    def _activity_finish(label: str, *, ok: bool, note: str, elapsed: float) -> None:
         import sys as _sys
 
-        _say(f"[clogem] START: {label}")
+        name = _activity_name(label)
+        if ok:
+            tail = f"  {elapsed:.0f}s" if elapsed >= 1 else ""
+            _sys.stdout.write(f"{_ACTIVITY_MUTED}  · {name}{tail}{_ACTIVITY_RESET}\n")
+        else:
+            _sys.stdout.write(f"{_ACTIVITY_ROSE}  · {name}  {note}{_ACTIVITY_RESET}\n")
+        _sys.stdout.flush()
+        if not ok:
+            logger.debug("activity failed label=%s note=%s", label, note)
+
+    def _run_with_ascii_progress(label: str, fn):
+        """One in-place status line, then a single finished line."""
+        import sys as _sys
+
         stop = threading.Event()
         t0 = time.monotonic()
-        frames = "|/-\\"
+        name = _activity_name(label)
 
         def _spin() -> None:
             i = 0
             while not stop.is_set():
-                elapsed = int(time.monotonic() - t0)
-                ch = frames[i % len(frames)]
-                tail = f"... working {ch} ({elapsed}s)"
-                line = f"  {label} {tail}"
-                pad = max(0, 76 - len(line))
+                ch = _ACTIVITY_FRAMES[i % len(_ACTIVITY_FRAMES)]
                 _sys.stdout.write(
-                    "\r"
-                    + _SPINNER_DIM
-                    + line
-                    + (" " * pad)
-                    + _SPINNER_RESET
+                    f"\r\x1b[2K{_ACTIVITY_ROSE}  {ch} {name}{_ACTIVITY_RESET}"
                 )
                 _sys.stdout.flush()
-                time.sleep(0.12)
+                time.sleep(0.16)
                 i += 1
 
         th = threading.Thread(target=_spin, daemon=True)
         th.start()
+        out = None
         try:
             out = fn()
         finally:
             stop.set()
             th.join(timeout=2.0)
-            _sys.stdout.write("\r" + (" " * 80) + "\r\n")
+            _sys.stdout.write("\r\x1b[2K")
             _sys.stdout.flush()
         elapsed = time.monotonic() - t0
-        _say(f"[clogem] DONE:  {label}  ({elapsed:.1f}s)")
+        ok = not hasattr(out, "returncode") or getattr(out, "returncode", 0) == 0
+        note = ""
+        if not ok:
+            note = _activity_note(
+                getattr(out, "stderr", "") or "",
+                getattr(out, "returncode", 1),
+            )
+        _activity_finish(label, ok=ok, note=note, elapsed=elapsed)
         return out
 
     async def _run_with_ascii_progress_async(label: str, coro_factory):
@@ -998,32 +1039,28 @@ async def async_main():
         """
         import sys as _sys
 
-        await trace_doing_async(f"START: {label}")
         stop = asyncio.Event()
         t0 = time.monotonic()
-        frames = "|/-\\"
+        name = _activity_name(label)
         team_key = _TEAM_KEY_VAR.get() or ""
 
         async def _spin() -> None:
             i = 0
             while not stop.is_set():
-                elapsed = int(time.monotonic() - t0)
-                ch = frames[i % len(frames)]
-                tail = f"... working {ch} ({elapsed}s)"
-                line = f"  {label} {tail}"
-                pad = max(0, 76 - len(line))
+                ch = _ACTIVITY_FRAMES[i % len(_ACTIVITY_FRAMES)]
                 if team_key:
-                    _TEAM_STATUS[team_key] = f"{label} {tail}"
+                    _TEAM_STATUS[team_key] = name
                     _render_team_status_board()
                 else:
                     _sys.stdout.write(
-                        "\r" + _SPINNER_DIM + line + (" " * pad) + _SPINNER_RESET
+                        f"\r\x1b[2K{_ACTIVITY_ROSE}  {ch} {name}{_ACTIVITY_RESET}"
                     )
                     _sys.stdout.flush()
                 i += 1
-                await asyncio.sleep(0.12)
+                await asyncio.sleep(0.16)
 
         spin_task = asyncio.create_task(_spin())
+        out = None
         try:
             out = await coro_factory()
         finally:
@@ -1033,13 +1070,26 @@ async def async_main():
             except Exception:
                 pass
             if team_key:
-                _TEAM_STATUS[team_key] = f"{label} done"
+                _TEAM_STATUS[team_key] = name
                 _render_team_status_board()
             else:
-                _sys.stdout.write("\r" + (" " * 80) + "\r\n")
+                _sys.stdout.write("\r\x1b[2K")
                 _sys.stdout.flush()
         elapsed = time.monotonic() - t0
-        await trace_done_async(f"DONE:  {label}  ({elapsed:.1f}s)")
+        if not team_key:
+            ok = not hasattr(out, "returncode") or getattr(out, "returncode", 0) == 0
+            note = ""
+            if not ok:
+                note = _activity_note(
+                    getattr(out, "stderr", "") or "",
+                    getattr(out, "returncode", 1),
+                )
+                logger.debug(
+                    "hidden stderr for %s: %s",
+                    label,
+                    (getattr(out, "stderr", "") or "")[:2000],
+                )
+            _activity_finish(label, ok=ok, note=note, elapsed=elapsed)
         return out
 
     async def _stream_sdk_response(
@@ -1124,14 +1174,6 @@ async def async_main():
 
         if status_msg:
             result = await _run_with_ascii_progress_async(status_msg, _run_async)
-            if result.returncode != 0:
-                _say(
-                    f"[clogem] WARNING: process exited with code {result.returncode}"
-                )
-                err = (result.stderr or "").strip()
-                if err:
-                    clip = err[:800] + ("..." if len(err) > 800 else "")
-                    console.print(Text(f"  stderr: {clip}", style=LOG_WARN))
         else:
             result = await _run_async()
         return result.stdout or "", result.stderr or "", result.returncode
@@ -3627,17 +3669,10 @@ Return project edits as:
                 sources = (attach_block or "").strip()
                 orch_provider = role_provider_map.get("orchestrator", "codex")
                 panel = research_providers(orchestrator_provider=orch_provider)
-                if sources:
-                    trace_doing(
-                        "/research with @ sources — each model answers from the attached "
-                        "files only, then the orchestrator compiles one reply."
-                    )
-                else:
-                    trace_doing(
-                        "/research — each available model researches on its own "
-                        f"({', '.join(panel)}); the orchestrator then verifies conflicts "
-                        "and compiles one reply."
-                    )
+                import sys as _sys
+
+                _sys.stdout.write(f"{_ACTIVITY_MUTED}\n  Research{_ACTIVITY_RESET}\n")
+                _sys.stdout.flush()
                 research_raw, research_err, research_rc, _reports = (
                     await conduct_multi_model_research(
                         question=research_task_body,
@@ -3664,8 +3699,6 @@ Return project edits as:
                     _token_turn_footer()
                     continue
 
-                trace_done("Compiled /research reply ready.")
-                live_reasoning_banner_chat(task or "/research")
                 section_rule("Reply (/research)")
                 console.print()
                 console.print((research_raw or "").strip() or "(empty reply)")
