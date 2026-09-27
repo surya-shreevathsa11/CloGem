@@ -220,8 +220,21 @@ async def async_main():
         "resume",
         help="Pick a previous session to continue from (interactive session picker).",
     )
+    _setup_sp = _subparsers.add_parser(
+        "setup",
+        help="Install Codex, Gemini, Claude, and Grok, then save sign-in settings.",
+    )
+    _setup_sp.add_argument(
+        "--yes",
+        action="store_true",
+        help="Install missing CLIs and write non-secret settings without prompting.",
+    )
 
     _args = _ap.parse_args()
+    if getattr(_args, "subcommand", None) == "setup":
+        from clogem.services.setup_wizard import run_setup
+
+        raise SystemExit(run_setup(assume_yes=bool(getattr(_args, "yes", False))))
     _codex_model = (_args.codex_model or os.environ.get("CLOGEM_CODEX_MODEL") or "").strip() or None
     _gemini_model = (_args.gemini_model or os.environ.get("CLOGEM_GEMINI_MODEL") or "").strip() or None
     _claude_model = (_args.claude_model or os.environ.get("CLOGEM_CLAUDE_MODEL") or "").strip() or None

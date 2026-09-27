@@ -1,0 +1,33 @@
+{
+  "name": "clogem",
+  "version": "0.1.0",
+  "description": "Clogem CLI: install Codex, Gemini, Claude, and Grok, then run the coding workflow",
+  "bin": {
+    "clogem": "npm/bin/clogem.js"
+  },
+  "files": [
+    "npm/bin/clogem.js",
+    "clogem/**/*.py",
+    ".ai/**",
+    "pyproject.toml",
+    "setup.py",
+    "README.md",
+    "help.md",
+    "commands.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/surya-shreevathsa11/CloGem.git"
+  },
+  "keywords": [
+    "clogem",
+    "codex",
+    "gemini",
+    "claude",
+    "grok",
+    "cli"
+  ]
+}

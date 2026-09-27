@@ -163,7 +163,27 @@ On **Windows**, you can use **WSL** (below) or native installs if `python3`, `pi
 
 ---
 
-## Full installation (end-to-end)
+## Install with npm
+
+This is the install for people who want to use Clogem, not edit it.
+
+```bash
+npm install -g clogem
+clogem
+```
+
+You need **Node.js 18+** and **Python 3.10+**. The `clogem` command creates a private virtualenv, installs the app, and on the first launch runs `clogem setup`.
+
+Setup asks before it installs anything else:
+
+- Codex (`npm install -g @openai/codex`), then `codex login`
+- Gemini CLI (`npm install -g @google/gemini-cli`). Personal accounts still need an AI Studio key: setup can save `GEMINI_API_KEY` and `CLOGEM_GEMINI_BACKEND=sdk`
+- Claude Code (`npm install -g @anthropic-ai/claude-code`). That CLI has its own login. Clogem calls Claude only when `ANTHROPIC_API_KEY` is set
+- Grok, using the official install script, then `grok` for browser sign-in
+
+Run `clogem setup` again any time. `clogem --skip-setup` skips the first-run wizard.
+
+## Full installation from a git clone (end-to-end)
 
 Do these **in order** the first time you set up the machine.
 
