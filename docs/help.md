@@ -1,6 +1,6 @@
 # Clogem Command Help
 
-`clogem setup` (run outside a session) installs Codex, Gemini, Claude Code, and Grok, then saves sign-in settings. `clogem update` refreshes an npm install.
+`clogem setup` (run outside a session) installs Codex, Gemini, Claude Code, and Grok, then saves sign-in settings. `clogem key gemini` adds or replaces one API key later (`claude`, `grok`, and `openai` work the same way). `clogem update` refreshes an npm install.
 
 This file is a complete reference for slash commands available inside an active `clogem` session.
 

@@ -190,7 +190,7 @@ async function main() {
   await ensureApp();
   const args = process.argv.slice(2).filter((arg) => arg !== "--skip-setup");
   const marker = path.join(dataDir, "setup-done");
-  const wantsSetup = args[0] === "setup";
+  const wantsSetup = args[0] === "setup" || args[0] === "key";
   const firstRun = process.stdin.isTTY && !fs.existsSync(marker) && !wantsSetup && !process.argv.includes("--skip-setup");
   if (firstRun) {
     const status = run(venvClogem(), ["setup"]);

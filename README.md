@@ -181,7 +181,13 @@ Setup asks before it installs anything else:
 - Claude Code (`npm install -g @anthropic-ai/claude-code`). That CLI has its own login. Clogem calls Claude only when `ANTHROPIC_API_KEY` is set
 - Grok, using the official install script, then `grok` for browser sign-in
 
-Run `clogem setup` again any time. `clogem --skip-setup` skips the first-run wizard.
+Run `clogem setup` again any time. Press Enter on a key you already saved and it stays. To add one key later without the rest of setup:
+
+```bash
+clogem key gemini
+```
+
+The same command takes `claude`, `grok`, or `openai`. `clogem key` with no name shows which of those are saved. `clogem --skip-setup` skips the first-run wizard.
 
 When a new version is published, update from the terminal. This replaces the installed copy and refreshes the private app on the next start. You do not uninstall or delete anything first.
 

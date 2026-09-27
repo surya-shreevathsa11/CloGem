@@ -9,7 +9,8 @@ All commands available in a `clogem` session, sorted alphabetically.
 | Command | What it does | How to enable |
 |---------|-------------|---------------|
 | `clogem` | Start the interactive REPL | `npm install -g @shywolf/clogem` or `pip install -e .` |
-| `clogem setup` | Install Codex, Gemini, Claude Code, and Grok, then save sign-in settings | Built-in subcommand. `--yes` skips prompts for installs and non-secret settings |
+| `clogem setup` | Install Codex, Gemini, Claude Code, and Grok, then save sign-in settings | Built-in subcommand. `--yes` skips prompts for installs and non-secret settings. Enter on a key prompt keeps a key already saved |
+| `clogem key` | Add or replace one API key later | `clogem key gemini`, or `clogem key` to see which keys are saved. Also `claude`, `grok`, `openai` |
 | `clogem update` | Update the npm install and refresh the private app | `npm install -g @shywolf/clogem` first. Does not apply to a git-clone install |
 | `clogem --god-mode` | Start with all permissions pre-granted (no approval prompts) | Pass the flag, or set `CLOGEM_GOD_MODE=1`, or `god_mode = true` in `.clogem.toml` |
 | `clogem --no-stitch` | Disable the Google Stitch stage for UI-heavy tasks | Pass the flag, or set `CLOGEM_STITCH=0` |
