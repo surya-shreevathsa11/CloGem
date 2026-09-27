@@ -132,6 +132,7 @@ def test_gemini_stream_async_yields_chunks(monkeypatch):
             self.aio = SimpleNamespace(models=_AioModels())
 
     import google.genai
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
     monkeypatch.setattr(google.genai, "Client", lambda *a, **k: _Client())
 
     from clogem.llm_clients import gemini_stream_async
@@ -152,6 +153,7 @@ def test_gemini_stream_async_skips_empty_text(monkeypatch):
             self.aio = SimpleNamespace(models=_AioModels())
 
     import google.genai
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
     monkeypatch.setattr(google.genai, "Client", lambda *a, **k: _Client())
 
     from clogem.llm_clients import gemini_stream_async

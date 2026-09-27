@@ -5,6 +5,12 @@ from clogem.logging_utils import get_logger
 logger = get_logger(__name__)
 
 
+def is_genai_cleanup_noise(message: str, exc: BaseException | None = None) -> bool:
+    """google-genai schedules aclose() from __del__ even when the async client was never created."""
+    blob = f"{message}\n{exc or ''}".lower()
+    return "_async_httpx_client" in blob
+
+
 def mentions_api_key(text: str) -> bool:
     low = (text or "").lower()
     return "api key" in low or "api_key" in low

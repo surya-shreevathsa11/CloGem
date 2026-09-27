@@ -12,6 +12,15 @@ from clogem.logging_utils import get_logger
 
 logger = get_logger(__name__)
 
+_MISSING_GEMINI_KEY = "No API key was provided. Set GEMINI_API_KEY."
+
+
+def _gemini_key_present() -> bool:
+    return bool(
+        os.environ.get("GEMINI_API_KEY", "").strip()
+        or os.environ.get("GOOGLE_API_KEY", "").strip()
+    )
+
 
 @dataclass
 class LLMResult:
@@ -151,6 +160,8 @@ def openai_generate(prompt: str, model: str, timeout_sec: Optional[int] = None) 
 
 
 def gemini_generate(prompt: str, model: str, timeout_sec: Optional[int] = None) -> LLMResult:
+    if not _gemini_key_present():
+        return LLMResult("", _MISSING_GEMINI_KEY, 1)
     try:
         from google import genai
     except Exception as e:
@@ -209,6 +220,8 @@ async def openai_generate_async(
 async def gemini_generate_async(
     prompt: str, model: str, timeout_sec: Optional[int] = None
 ) -> LLMResult:
+    if not _gemini_key_present():
+        return LLMResult("", _MISSING_GEMINI_KEY, 1)
     try:
         from google import genai
     except Exception as e:
@@ -238,6 +251,8 @@ def gemini_generate_with_google_search(
     Gemini with Grounding with Google Search (live web). Requires google-genai SDK.
     See: https://ai.google.dev/gemini-api/docs/google-search
     """
+    if not _gemini_key_present():
+        return LLMResult("", _MISSING_GEMINI_KEY, 1)
     try:
         from google import genai
         from google.genai import types
@@ -270,6 +285,8 @@ def gemini_generate_with_google_search(
 async def gemini_generate_with_google_search_async(
     prompt: str, model: str, timeout_sec: Optional[int] = None
 ) -> LLMResult:
+    if not _gemini_key_present():
+        return LLMResult("", _MISSING_GEMINI_KEY, 1)
     try:
         from google import genai
         from google.genai import types
@@ -425,6 +442,8 @@ async def gemini_stream_async(
     prompt: str, model: str, timeout_sec: Optional[int] = None
 ) -> AsyncGenerator[str, None]:
     """Yield text chunks from Gemini as they arrive. Raises on error."""
+    if not _gemini_key_present():
+        raise RuntimeError(_MISSING_GEMINI_KEY)
     try:
         from google import genai
     except Exception as e:
@@ -517,6 +536,8 @@ def gemini_generate_with_image(
     image_path: str,
     timeout_sec: Optional[int] = None,
 ) -> LLMResult:
+    if not _gemini_key_present():
+        return LLMResult("", _MISSING_GEMINI_KEY, 1)
     try:
         from google import genai
         from google.genai import types
@@ -552,6 +573,8 @@ async def gemini_generate_with_image_async(
     image_path: str,
     timeout_sec: Optional[int] = None,
 ) -> LLMResult:
+    if not _gemini_key_present():
+        return LLMResult("", _MISSING_GEMINI_KEY, 1)
     try:
         from google import genai
         from google.genai import types

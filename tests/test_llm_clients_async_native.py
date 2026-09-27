@@ -40,6 +40,7 @@ def test_gemini_generate_async_uses_native_aio(monkeypatch):
 
     import google.genai
 
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
     monkeypatch.setattr(google.genai, "Client", lambda *a, **k: _Client())
 
     from clogem.llm_clients import gemini_generate_async

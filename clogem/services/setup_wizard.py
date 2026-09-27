@@ -30,6 +30,14 @@ DEFAULT_ENV = {
     "CLOGEM_AUTO_PERMISSIONS": "no",
 }
 
+# Add a row here when a new provider needs a key. `clogem key <name>` picks it up.
+API_KEYS: tuple[tuple[str, str, str], ...] = (
+    ("gemini", "GEMINI_API_KEY", "Gemini"),
+    ("claude", "ANTHROPIC_API_KEY", "Claude"),
+    ("grok", "XAI_API_KEY", "Grok"),
+    ("openai", "OPENAI_API_KEY", "OpenAI"),
+)
+
 Say = Callable[[str], None]
 Runner = Callable[[Sequence[str]], "CmdResult"]
 InputFn = Callable[[str], str]
@@ -63,6 +71,48 @@ def render_shell_block(values: Mapping[str, str]) -> str:
         lines.append(f"export {key}={shlex.quote(value)}")
     lines.append(END)
     return "\n".join(lines) + "\n"
+
+
+def parse_shell_block(existing: str) -> dict[str, str]:
+    """Read export lines from the Clogem block. Values are unquoted."""
+    if BEGIN not in existing or END not in existing:
+        return {}
+    body = existing.split(BEGIN, 1)[1].split(END, 1)[0]
+    values: dict[str, str] = {}
+    for line in body.splitlines():
+        line = line.strip()
+        if not line.startswith("export ") or "=" not in line:
+            continue
+        key, raw = line[len("export ") :].split("=", 1)
+        parsed = shlex.split(raw) if raw else []
+        values[key.strip()] = parsed[0] if parsed else ""
+    return values
+
+
+def saved_shell_values(rc_path: Path) -> dict[str, str]:
+    if not rc_path.is_file():
+        return {}
+    return parse_shell_block(rc_path.read_text(encoding="utf-8"))
+
+
+def apply_saved_env(home: Optional[Path] = None, environ: Optional[dict[str, str]] = None) -> None:
+    """Load the Clogem shell block into this process when the shell has not."""
+    import os
+
+    target = environ if environ is not None else os.environ
+    home = home or Path.home()
+    for key, value in saved_shell_values(shell_rc_path(home, target)).items():
+        if value and not str(target.get(key, "")).strip():
+            target[key] = value
+
+
+def key_prompt(label: str, env_name: str, saved: Mapping[str, str]) -> str:
+    if saved.get(env_name):
+        return f"{label} API key (Enter to keep the saved key): "
+    extra = ""
+    if env_name == "XAI_API_KEY":
+        extra = "; leave empty if you use grok login"
+    return f"{label} API key (Enter to skip{extra}): "
 
 
 def upsert_shell_block(existing: str, block: str) -> str:
@@ -157,33 +207,21 @@ def run_setup(
     elif not which_fn("codex"):
         speak("After Codex is installed, run: codex login")
 
+    saved = saved_shell_values(rc_path)
     values = dict(DEFAULT_ENV)
-    gemini_key = _secret(
-        "GEMINI_API_KEY (Enter to skip): ",
-        assume_yes=assume_yes,
-        is_tty=tty,
-        input_fn=ask,
-    )
-    if gemini_key:
-        values["GEMINI_API_KEY"] = gemini_key
+    values.update(saved)
     speak("Gemini on a personal account uses that API key with CLOGEM_GEMINI_BACKEND=sdk.")
     speak("Claude inside Clogem needs ANTHROPIC_API_KEY. The claude command is a separate login.")
-    anthropic_key = _secret(
-        "ANTHROPIC_API_KEY (Enter to skip): ",
-        assume_yes=assume_yes,
-        is_tty=tty,
-        input_fn=ask,
-    )
-    if anthropic_key:
-        values["ANTHROPIC_API_KEY"] = anthropic_key
-    xai_key = _secret(
-        "XAI_API_KEY (Enter to skip; leave empty if you use grok login): ",
-        assume_yes=assume_yes,
-        is_tty=tty,
-        input_fn=ask,
-    )
-    if xai_key:
-        values["XAI_API_KEY"] = xai_key
+    speak("Press Enter to keep a key that is already saved.")
+    for _name, env_name, label in API_KEYS:
+        entered = _secret(
+            key_prompt(label, env_name, saved),
+            assume_yes=assume_yes,
+            is_tty=tty,
+            input_fn=ask,
+        )
+        if entered:
+            values[env_name] = entered
 
     if which_fn("grok") and _yes(
         "Start grok sign-in now?",
@@ -212,6 +250,58 @@ def run_setup(
 
     mark_complete(home)
     speak("Setup finished. Run clogem to start.")
+    return 0
+
+
+def run_key(
+    name: Optional[str] = None,
+    *,
+    home: Optional[Path] = None,
+    environ: Optional[Mapping[str, str]] = None,
+    input_fn: Optional[InputFn] = None,
+    say: Optional[Say] = None,
+    is_tty: Optional[bool] = None,
+) -> int:
+    """Save one provider API key without reinstalling the other tools."""
+    home = home or Path.home()
+    env_map = dict(environ or {})
+    ask = input_fn or input
+    speak = say or print
+    tty = sys_is_tty() if is_tty is None else is_tty
+    rc_path = shell_rc_path(home, env_map)
+    known = {item[0]: item for item in API_KEYS}
+    saved = saved_shell_values(rc_path)
+
+    chosen = (name or "").strip().lower()
+    if not chosen:
+        speak("API keys")
+        for key_name, env_name, _label in API_KEYS:
+            state = "saved" if saved.get(env_name) else "not set"
+            speak(f"  {key_name}: {state}")
+        if not tty:
+            speak("Name one key, for example: clogem key gemini")
+            return 2
+        chosen = ask("Which key? ").strip().lower()
+
+    row = known.get(chosen)
+    if row is None:
+        names = ", ".join(item[0] for item in API_KEYS)
+        speak(f"Unknown key {chosen!r}. Use one of: {names}.")
+        return 2
+
+    _key_name, env_name, label = row
+    entered = _secret(key_prompt(label, env_name, saved), assume_yes=False, is_tty=tty, input_fn=ask)
+    if not entered:
+        speak("Key unchanged.")
+        return 0
+
+    values = dict(DEFAULT_ENV)
+    values.update(saved)
+    values[env_name] = entered
+    existing = rc_path.read_text(encoding="utf-8") if rc_path.is_file() else ""
+    rc_path.parent.mkdir(parents=True, exist_ok=True)
+    rc_path.write_text(upsert_shell_block(existing, render_shell_block(values)), encoding="utf-8")
+    speak(f"Saved {chosen}. Open a new terminal so clogem can see it.")
     return 0
 
 

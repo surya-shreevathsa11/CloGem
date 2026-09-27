@@ -229,12 +229,26 @@ async def async_main():
         action="store_true",
         help="Install missing CLIs and write non-secret settings without prompting.",
     )
+    _key_sp = _subparsers.add_parser(
+        "key",
+        help="Add or replace one provider API key without reinstalling tools.",
+    )
+    _key_sp.add_argument(
+        "name",
+        nargs="?",
+        default=None,
+        help="gemini, claude, grok, or openai. Omit to list which keys are saved.",
+    )
 
     _args = _ap.parse_args()
     if getattr(_args, "subcommand", None) == "setup":
         from clogem.services.setup_wizard import run_setup
 
         raise SystemExit(run_setup(assume_yes=bool(getattr(_args, "yes", False))))
+    if getattr(_args, "subcommand", None) == "key":
+        from clogem.services.setup_wizard import run_key
+
+        raise SystemExit(run_key(getattr(_args, "name", None)))
     _codex_model = (_args.codex_model or os.environ.get("CLOGEM_CODEX_MODEL") or "").strip() or None
     _gemini_model = (_args.gemini_model or os.environ.get("CLOGEM_GEMINI_MODEL") or "").strip() or None
     _claude_model = (_args.claude_model or os.environ.get("CLOGEM_CLAUDE_MODEL") or "").strip() or None
@@ -255,13 +269,10 @@ async def async_main():
     def _loop_exception_handler(_loop, context) -> None:
         exc = context.get("exception")
         msg = str(context.get("message") or "")
-        txt = f"{msg}\n{exc or ''}".lower()
-        # Suppress known google-genai async cleanup noise for end users.
-        if (
-            "task exception was never retrieved" in txt
-            and "baseapiclient" in txt
-            and "_async_httpx_client" in txt
-        ):
+        from clogem.ui import is_genai_cleanup_noise
+
+        # prompt_toolkit prints this as "Press ENTER to continue" unless we swallow it.
+        if is_genai_cleanup_noise(msg, exc if isinstance(exc, BaseException) else None):
             logger.debug(
                 "Suppressed google-genai async cleanup exception noise",
                 exc_info=True,
@@ -2893,7 +2904,12 @@ Return project edits as:
     async def read_task_line(prompt: str = "What would you like to do? ") -> str:
         if task_prompt_session is not None:
             try:
-                return (await task_prompt_session.prompt_async(prompt)).strip()
+                return (
+                    await task_prompt_session.prompt_async(
+                        prompt,
+                        set_exception_handler=False,
+                    )
+                ).strip()
             except (EOFError, KeyboardInterrupt):
                 raise
         prompt_label = Text(prompt, style=TITLE)
@@ -4559,6 +4575,9 @@ NEW:
 def main() -> None:
     import asyncio
 
+    from clogem.services.setup_wizard import apply_saved_env
+
+    apply_saved_env()
     asyncio.run(async_main())
 
 

@@ -4,8 +4,10 @@ from pathlib import Path
 
 from clogem.services.setup_wizard import (
     CmdResult,
+    apply_saved_env,
     missing_companions,
     render_shell_block,
+    run_key,
     run_setup,
     upsert_shell_block,
 )
@@ -64,7 +66,7 @@ def test_declined_install_does_not_run_npm(tmp_path: Path):
         calls.append(tuple(cmd))
         return CmdResult(1, "EACCES")
 
-    answers = iter(["n", "n", "n", "n", "", "", "", "n"])
+    answers = iter(["n", "n", "n", "n", "", "", "", "", "n"])
     home = tmp_path / "home"
     home.mkdir()
     code = run_setup(
@@ -100,3 +102,110 @@ def test_failed_npm_install_prints_sudo_hint(tmp_path: Path):
     )
     assert any("sudo npm install -g @openai/codex" in note for note in notes)
     assert not any("sudo npm install -g @google/gemini-cli" in note for note in notes)
+
+
+def test_setup_keeps_a_saved_key_when_the_prompt_is_skipped(tmp_path: Path):
+    home = tmp_path / "home"
+    home.mkdir()
+    rc = home / ".zshrc"
+    rc.write_text(
+        "\n".join(
+            [
+                "# >>> clogem setup >>>",
+                "export CLOGEM_GEMINI_BACKEND=sdk",
+                "export GEMINI_API_KEY=already",
+                "export ANTHROPIC_API_KEY=claude-key",
+                "# <<< clogem setup <<<",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    answers = iter(["n", "", "new-claude", "", "", "n", "y"])
+    code = run_setup(
+        assume_yes=False,
+        home=home,
+        environ={"SHELL": "/bin/zsh"},
+        which=lambda _name: "/bin/tool",
+        runner=lambda _cmd: CmdResult(0),
+        input_fn=lambda _prompt: next(answers),
+        is_tty=True,
+    )
+    assert code == 0
+    text = rc.read_text(encoding="utf-8")
+    assert "GEMINI_API_KEY=already" in text
+    assert "ANTHROPIC_API_KEY=new-claude" in text
+    assert text.count("# >>> clogem setup >>>") == 1
+
+
+def test_key_command_saves_one_key_and_leaves_the_others(tmp_path: Path):
+    home = tmp_path / "home"
+    home.mkdir()
+    rc = home / ".zshrc"
+    rc.write_text("export PATH=old\n", encoding="utf-8")
+    notes: list[str] = []
+    code = run_key(
+        "gemini",
+        home=home,
+        environ={"SHELL": "/bin/zsh"},
+        input_fn=lambda _prompt: "gemini-secret",
+        say=notes.append,
+        is_tty=True,
+    )
+    assert code == 0
+    text = rc.read_text(encoding="utf-8")
+    assert "export PATH=old" in text
+    assert "GEMINI_API_KEY=gemini-secret" in text
+    assert "ANTHROPIC_API_KEY" not in text
+    assert any("Saved gemini" in note for note in notes)
+
+    code = run_key(
+        "claude",
+        home=home,
+        environ={"SHELL": "/bin/zsh"},
+        input_fn=lambda _prompt: "claude-secret",
+        say=notes.append,
+        is_tty=True,
+    )
+    text = rc.read_text(encoding="utf-8")
+    assert code == 0
+    assert "GEMINI_API_KEY=gemini-secret" in text
+    assert "ANTHROPIC_API_KEY=claude-secret" in text
+
+
+def test_apply_saved_env_loads_a_key_the_shell_has_not_exported(tmp_path: Path):
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / ".zshrc").write_text(
+        "\n".join(
+            [
+                "# >>> clogem setup >>>",
+                "export GEMINI_API_KEY=from-file",
+                "export CLOGEM_GEMINI_BACKEND=sdk",
+                "# <<< clogem setup <<<",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    env = {"SHELL": "/bin/zsh", "GEMINI_API_KEY": ""}
+    apply_saved_env(home, env)
+    assert env["GEMINI_API_KEY"] == "from-file"
+    assert env["CLOGEM_GEMINI_BACKEND"] == "sdk"
+
+    env["GEMINI_API_KEY"] = "already-in-process"
+    apply_saved_env(home, env)
+    assert env["GEMINI_API_KEY"] == "already-in-process"
+
+
+def test_key_command_rejects_an_unknown_provider(tmp_path: Path):
+    notes: list[str] = []
+    code = run_key(
+        "nope",
+        home=tmp_path,
+        environ={"SHELL": "/bin/zsh"},
+        say=notes.append,
+        is_tty=True,
+    )
+    assert code == 2
+    assert any("gemini" in note and "openai" in note for note in notes)
