@@ -24,8 +24,8 @@ This creates a self-improving coding workflow that works for:
 - Multi-file project generation
 - CLI-based workflow (fast and repeatable)
 
-Detailed capability reference: [`features.md`](features.md)  
-Command reference: [`help.md`](help.md)
+Detailed capability reference: [`docs/features.md`](docs/features.md)  
+Command reference: [`docs/help.md`](docs/help.md)
 
 ---
 
@@ -726,7 +726,7 @@ Async LLM execution path:
 
 On an interactive terminal, the main task prompt uses **prompt-style completion**: type `/` or `@` and use **Tab** (or keep typing) to open a **two-column** menu (command/path + short description) with a **dark** theme. For colors closest to the Codex-style blue/grey look, use **Windows Terminal** or another **true-color** terminal. Set `**CLOGEM_NO_TRUE_COLOR=1`** if the menu colors look wrong on legacy consoles.
 
-For a full slash-command reference, see [`help.md`](help.md).
+For a full slash-command reference, see [`docs/help.md`](docs/help.md).
 
 While Clogem is running, you can change models without restarting:
 

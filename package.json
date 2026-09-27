@@ -12,8 +12,8 @@
     "pyproject.toml",
     "setup.py",
     "README.md",
-    "help.md",
-    "commands.md"
+    "docs/help.md",
+    "docs/commands.md"
   ],
   "engines": {
     "node": ">=18"
