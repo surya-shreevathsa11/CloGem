@@ -44,7 +44,79 @@ def test_format_research_reports_keeps_failures_as_missing_evidence():
     assert "### codex\nalpha" in text
     assert "### gemini" in text
     assert "search down" in text
-    assert "failed" in text
+    assert "unavailable" in text
+
+
+def test_format_research_reports_hides_model_list_dumps():
+    dump = (
+        "ERROR codex models manager: failed to refresh available models: "
+        "unknown variant 'max' body: {\"models\":[{\"slug\":\"gpt-5.5\"}]}"
+    )
+    text = format_research_reports([("codex", dump, dump, 1)])
+    assert "gpt-5.5" not in text
+    assert "update the Codex CLI" in text
+    assert "unavailable" in text
+
+
+def test_missing_api_key_skips_the_gemini_retry_and_stays_short():
+    calls: list[str] = []
+
+    async def run_provider(provider: str, prompt: str, status: str):
+        calls.append(status)
+        if "best-effort" in status:
+            raise AssertionError("gemini was retried after a missing API key")
+        if "compile one answer" in prompt.lower():
+            return "compiled", "", 0
+        return f"{provider} ok", "", 0
+
+    async def run_gemini_grounded(prompt: str, status: str):
+        return "", "No API key was provided. Please pass a valid API key.", 1
+
+    compiled, _err, rc, reports = asyncio.run(
+        conduct_multi_model_research(
+            question="topic",
+            sources="",
+            providers=["codex", "gemini"],
+            orchestrator_provider="codex",
+            local_block="now",
+            run_provider=run_provider,
+            run_gemini_grounded=run_gemini_grounded,
+        )
+    )
+    assert rc == 0
+    assert compiled == "compiled"
+    assert "needs an API key" in reports
+    assert "https://" not in reports
+
+
+def test_compile_falls_back_when_the_orchestrator_dumps_its_model_list():
+    async def run_provider(provider: str, prompt: str, status: str):
+        if "compile one answer" in prompt.lower():
+            if provider == "codex":
+                return "", "failed to refresh available models: unknown variant 'max'", 1
+            return "Earth formed from a disk of dust.", "", 0
+        if provider == "grok":
+            return "Grok notes on formation.", "", 0
+        return "", "failed to refresh available models: unknown variant 'max'", 1
+
+    async def run_gemini_grounded(prompt: str, status: str):
+        return "", "No API key was provided.", 1
+
+    compiled, _err, rc, reports = asyncio.run(
+        conduct_multi_model_research(
+            question="how the world was made",
+            sources="",
+            providers=["codex", "gemini", "grok"],
+            orchestrator_provider="codex",
+            local_block="now",
+            run_provider=run_provider,
+            run_gemini_grounded=run_gemini_grounded,
+        )
+    )
+    assert rc == 0
+    assert compiled == "Earth formed from a disk of dust."
+    assert "unknown variant" not in reports
+    assert "gpt-" not in reports
 
 
 def test_format_research_reports_truncates_a_huge_report():

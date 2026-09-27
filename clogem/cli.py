@@ -836,13 +836,7 @@ async def async_main():
         g = int(session_tokens.get("gemini", 0) or 0)
         k = int(session_tokens.get("grok", 0) or 0)
         if c == 0 and g == 0 and k == 0:
-            console.print(
-                Text(
-                    "[clogem] Token usage: no counts found in CLI output this turn "
-                    "(free-tier CLIs often omit usage; check provider dashboards if needed).",
-                    style=MUTED,
-                )
-            )
+            return
         else:
             console.print(
                 Text(
@@ -964,6 +958,18 @@ async def async_main():
 
         return activity_note(stderr, code)
 
+    def _mentions_api_key(text: str) -> bool:
+        from clogem.ui import mentions_api_key
+
+        return mentions_api_key(text)
+
+    def _result_detail(out) -> str:
+        parts = (
+            getattr(out, "stderr", "") or "",
+            getattr(out, "error", "") or "",
+        )
+        return "\n".join(part for part in parts if part)
+
     def _activity_finish(label: str, *, ok: bool, note: str, elapsed: float) -> None:
         import sys as _sys
 
@@ -1011,7 +1017,7 @@ async def async_main():
         note = ""
         if not ok:
             note = _activity_note(
-                getattr(out, "stderr", "") or "",
+                _result_detail(out),
                 getattr(out, "returncode", 1),
             )
         _activity_finish(label, ok=ok, note=note, elapsed=elapsed)
@@ -1065,15 +1071,9 @@ async def async_main():
             ok = not hasattr(out, "returncode") or getattr(out, "returncode", 0) == 0
             note = ""
             if not ok:
-                note = _activity_note(
-                    getattr(out, "stderr", "") or "",
-                    getattr(out, "returncode", 1),
-                )
-                logger.debug(
-                    "hidden stderr for %s: %s",
-                    label,
-                    (getattr(out, "stderr", "") or "")[:2000],
-                )
+                detail = _result_detail(out)
+                note = _activity_note(detail, getattr(out, "returncode", 1))
+                logger.debug("hidden stderr for %s: %s", label, detail[:2000])
             _activity_finish(label, ok=ok, note=note, elapsed=elapsed)
         return out
 
@@ -2086,6 +2086,8 @@ async def async_main():
                         )
                     else:
                         r = await _run_sdk_async()
+                    if r.returncode != 0 and _mentions_api_key(r.error or ""):
+                        return "", r.error or "No API key was provided.", 1
                     if r.returncode != 0:
                         logger.debug(
                             "Gemini grounded async call failed; retrying with sync SDK path. error=%s",
@@ -2108,6 +2110,8 @@ async def async_main():
                 if backend == "sdk":
                     return "", r.error or "Gemini grounded call failed.", 1
             except Exception as e:
+                if _mentions_api_key(str(e)):
+                    return "", str(e), 1
                 if use_async:
                     logger.debug(
                         "Gemini grounded async path raised; retrying with sync SDK path",
@@ -3687,20 +3691,19 @@ Return project edits as:
                     _token_turn_footer()
                     continue
 
-                if research_rc != 0 or not (research_raw or "").strip():
+                from clogem.ui import is_model_dump
+
+                reply = (research_raw or "").strip()
+                if research_rc != 0 or not reply or is_model_dump(reply):
                     console.print()
                     console.print(Text("  · Compiling  could not finish", style=MUTED))
-                    if (reports_text or "").strip():
-                        section_rule("Reply (/research)")
-                        console.print()
-                        console.print(reports_text.strip())
-                        console.print()
+                    console.print()
                     _token_turn_footer()
                     continue
 
                 section_rule("Reply (/research)")
                 console.print()
-                console.print((research_raw or "").strip() or "(empty reply)")
+                console.print(reply)
                 console.print()
                 _token_turn_footer()
                 _say("[clogem] Turn finished. What would you like to do next?")

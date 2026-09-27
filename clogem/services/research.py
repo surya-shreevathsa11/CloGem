@@ -10,6 +10,7 @@ from clogem.prompts import (
     RESEARCH_WEB_PROMPT,
 )
 from clogem.role_mapping import grok_provider_available
+from clogem.ui import activity_note, is_model_dump, mentions_api_key
 
 RunModel = Callable[[str, str, str], Awaitable[Tuple[str, str, int]]]
 
@@ -38,18 +39,36 @@ def research_providers(
     return panel
 
 
+def _report_body(text: str, err: str, rc: int) -> str:
+    if rc == 0 and (text or "").strip() and not is_model_dump(text):
+        body = text.strip()
+    else:
+        reason = activity_note(f"{text or ''}\n{err or ''}", rc or 1) or "did not finish"
+        body = f"(unavailable: {reason})"
+    if len(body) > 6000:
+        body = body[:6000] + "\n...[truncated]"
+    return body
+
+
 def format_research_reports(reports: Sequence[Tuple[str, str, str, int]]) -> str:
     blocks: List[str] = []
     for provider, text, err, rc in reports:
-        if rc == 0 and (text or "").strip():
-            body = text.strip()
-        else:
-            detail = (err or "").strip() or "no output"
-            body = f"(this researcher failed, exit {rc})\n{detail}"
-        if len(body) > 6000:
-            body = body[:6000] + "\n...[truncated]"
-        blocks.append(f"### {provider}\n{body}")
+        blocks.append(f"### {provider}\n{_report_body(text, err, rc)}")
     return "\n\n".join(blocks)
+
+
+def visible_research_reply(
+    compiled: str,
+    reports: Sequence[Tuple[str, str, str, int]],
+) -> str:
+    """The text to show. Never a model-list dump or a raw stderr blob."""
+    if (compiled or "").strip() and not is_model_dump(compiled):
+        return compiled.strip()
+    parts: List[str] = []
+    for _provider, text, _err, rc in reports:
+        if rc == 0 and (text or "").strip() and not is_model_dump(text):
+            parts.append(text.strip())
+    return "\n\n".join(parts)
 
 
 def _sources_prompt(question: str, sources: str) -> str:
@@ -123,7 +142,7 @@ async def conduct_multi_model_research(
                 prompt,
                 "Gemini: /research (web-grounded)...",
             )
-            if rc != 0:
+            if rc != 0 and not mentions_api_key(err):
                 text, err, rc = await run_provider(
                     "gemini",
                     prompt
@@ -140,14 +159,30 @@ async def conduct_multi_model_research(
         reports.append((provider, text or "", err or "", rc))
 
     reports_text = format_research_reports(reports)
+    compile_prompt = _compile_prompt(
+        question=question,
+        sources=sources,
+        reports_text=reports_text,
+        orchestrator_provider=orch,
+    )
     compiled, err, rc = await run_provider(
         orch,
-        _compile_prompt(
-            question=question,
-            sources=sources,
-            reports_text=reports_text,
-            orchestrator_provider=orch,
-        ),
+        compile_prompt,
         "Orchestrator: verifying and compiling research...",
     )
+    if rc != 0 or is_model_dump(compiled or ""):
+        for provider, text, _err, provider_rc in reports:
+            if provider == orch or provider_rc != 0 or is_model_dump(text):
+                continue
+            compiled, err, rc = await run_provider(
+                provider,
+                compile_prompt,
+                "Orchestrator: verifying and compiling research...",
+            )
+            if rc == 0 and not is_model_dump(compiled or ""):
+                break
+    if rc != 0 or is_model_dump(compiled or ""):
+        usable = visible_research_reply("", reports)
+        if usable:
+            return usable, "", 0, reports_text
     return compiled or "", err or "", rc, reports_text

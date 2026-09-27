@@ -13,3 +13,6 @@ def test_activity_note_turns_timeouts_and_crashes_into_one_line() -> None:
     assert activity_note("subprocess timed out after 120s", 124) == "timed out"
     assert activity_note("[Errno 7] Argument list too long", 1) == "request was too large"
     assert "Traceback" not in activity_note("Traceback (most recent call last):\nboom", 1)
+    assert activity_note("No API key was provided. Please pass a valid API key.", 1) == "needs an API key"
+    dump = "failed to refresh available models: unknown variant 'max' {\"models\":[]}"
+    assert activity_note(dump, 1) == "update the Codex CLI"

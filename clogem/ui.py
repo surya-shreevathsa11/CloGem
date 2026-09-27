@@ -5,12 +5,28 @@ from clogem.logging_utils import get_logger
 logger = get_logger(__name__)
 
 
+def mentions_api_key(text: str) -> bool:
+    low = (text or "").lower()
+    return "api key" in low or "api_key" in low
+
+
+def is_model_dump(text: str) -> bool:
+    """True when text is a CLI diagnostic, not an answer."""
+    low = (text or "").lower()
+    if ("unknown variant" in low and "max" in low) or "failed to refresh available models" in low:
+        return True
+    stripped = (text or "").lstrip()
+    return stripped.startswith("{") and '"models"' in low
+
+
 def activity_note(stderr: str, code: int) -> str:
     """One short reason for a failed model step. Never a traceback or log dump."""
     text = stderr or ""
     low = text.lower()
-    if "unknown variant" in low and "max" in low:
-        return "could not refresh models"
+    if ("unknown variant" in low and "max" in low) or "failed to refresh available models" in low:
+        return "update the Codex CLI"
+    if "api key" in low or "api_key" in low:
+        return "needs an API key"
     if "timed out" in low or code == 124:
         return "timed out"
     if "argument list too long" in low or "too long" in low:
