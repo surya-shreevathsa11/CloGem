@@ -109,6 +109,8 @@ def _run_cli_run_subcommand(
     env["CLOGEM_CODEX_CMD"] = str(bin_dir / codex_exec)
     env["CLOGEM_GEMINI_CMD"] = str(bin_dir / gemini_exec)
     env["CLOGEM_GROK_CMD"] = str(bin_dir / "grok-not-installed")
+    env["CLOGEM_CODEX_BACKEND"] = "cli"
+    env["CLOGEM_GEMINI_BACKEND"] = "cli"
     env.pop("XAI_API_KEY", None)
     env.pop("ANTHROPIC_API_KEY", None)
     env["CLOGEM_AUTO_PERMISSIONS"] = "yes"
@@ -152,6 +154,8 @@ def _run_cli(
     env["CLOGEM_CODEX_CMD"] = str(bin_dir / codex_exec)
     env["CLOGEM_GEMINI_CMD"] = str(bin_dir / gemini_exec)
     env["CLOGEM_GROK_CMD"] = str(bin_dir / "grok-not-installed")
+    env["CLOGEM_CODEX_BACKEND"] = "cli"
+    env["CLOGEM_GEMINI_BACKEND"] = "cli"
     env.pop("XAI_API_KEY", None)
     env.pop("ANTHROPIC_API_KEY", None)
     env["CLOGEM_AUTO_PERMISSIONS"] = "yes"

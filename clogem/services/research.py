@@ -10,7 +10,7 @@ from clogem.prompts import (
     RESEARCH_WEB_PROMPT,
 )
 from clogem.role_mapping import grok_provider_available
-from clogem.ui import activity_note, is_model_dump, mentions_api_key
+from clogem.ui import activity_note, gemini_error_is_final, is_model_dump
 
 RunModel = Callable[[str, str, str], Awaitable[Tuple[str, str, int]]]
 
@@ -142,7 +142,7 @@ async def conduct_multi_model_research(
                 prompt,
                 "Gemini: /research (web-grounded)...",
             )
-            if rc != 0 and not mentions_api_key(err):
+            if rc != 0 and not gemini_error_is_final(err):
                 text, err, rc = await run_provider(
                     "gemini",
                     prompt

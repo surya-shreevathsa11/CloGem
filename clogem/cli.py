@@ -7,7 +7,16 @@ from clogem.config import Settings
 from clogem.logging_utils import get_logger
 from clogem import prompts as prompt_defs
 from clogem.memory import MemoryStore
-from clogem.ui import boot_sequence
+from clogem.ui import (
+    ACTIVITY_ACCENT,
+    ACTIVITY_BAD,
+    ACTIVITY_DIM,
+    ACTIVITY_FRAMES,
+    ACTIVITY_INK,
+    ACTIVITY_RESET,
+    boot_sequence,
+    input_outline,
+)
 
 logger = get_logger(__name__)
 
@@ -201,8 +210,9 @@ async def async_main():
         "--god-mode",
         action="store_true",
         help=(
-            "Auto-grant all permissions: passes --full-auto to Codex, --yolo to Gemini, "
-            "and allows local commands without prompting. Equivalent to CLOGEM_GOD_MODE=1."
+            "Auto-grant permissions: Codex uses workspace write with automatic approval, "
+            "Gemini uses --yolo, and local commands run without prompting. "
+            "Equivalent to CLOGEM_GOD_MODE=1."
         ),
     )
 
@@ -316,34 +326,26 @@ async def async_main():
         import logging as _logging
         _logging.basicConfig(level=_logging.INFO, stream=sys.stderr, force=True)
 
-    # Accent (rose) + Claude-like neutrals (dim rules, soft reasoning frames)
-    BORDER = "#ffafaf"
-    TITLE = "bold #be5555"
-    SUBTITLE = "#5f3737"
-    MUTED = "#c87878"
+    # Warm ink on a dark terminal. One accent, no hot pink.
+    BORDER = "#3c3834"
+    TITLE = "#ece8e3"
+    SUBTITLE = "#9a948c"
+    MUTED = "#9a948c"
     DIM = "dim"
-    ITALIC_DIM = "italic dim"
-    LOG_START = "bold #be5555"
-    LOG_DONE = "green"
-    LOG_WARN = "yellow"
-    LOG_ERR = "bold red"
-    LOG_OK = "green"
-    LOG_TRACE = "italic #9a7a7a"
+    ITALIC_DIM = "italic #8a847c"
+    LOG_START = "#c47a6e"
+    LOG_DONE = "#b7c0b4"
+    LOG_WARN = "#c4ae86"
+    LOG_ERR = "#d08078"
+    LOG_OK = "#b7c0b4"
+    LOG_TRACE = "italic #8a847c"
 
     console = Console()
 
     if settings.god_mode:
-        from rich.rule import Rule
         console.print()
-        console.print(Rule("[bold red]⚡ GOD MODE ACTIVE ⚡[/bold red]", style="bold red"))
-        console.print(
-            Text(
-                "All permissions auto-granted: Codex runs with --full-auto, Gemini with --yolo, "
-                "local commands enabled. No approval prompts will appear this session.",
-                style="bold yellow",
-            )
-        )
-        console.print(Rule(style="bold red"))
+        console.print(Text("  god mode", style="#c47a6e"), end="")
+        console.print(Text("  ·  approvals are already on", style="#9a948c"))
         console.print()
 
     # --- Session state (shared across turns) ---
@@ -368,7 +370,7 @@ async def async_main():
 
     # Best-effort token totals per provider (parsed from CLI output when present).
     session_tokens = {"codex": 0, "gemini": 0, "claude": 0, "grok": 0}
-    # None = not asked yet; True/False = user chose whether to pass Codex --full-auto and Gemini --yolo.
+    # None = not asked yet; True/False = user chose automatic Codex approval and Gemini --yolo.
     auto_permissions: dict = {"granted": True if settings.god_mode else None}
     # None = not asked yet; True/False = user chose whether clogem can execute local shell commands (/run, /test, /lint, /github/clone).
     run_permissions: dict = {"granted": True if settings.god_mode else None}
@@ -774,7 +776,6 @@ async def async_main():
         re.compile(r"total[_\s-]*token[_\s-]*count[:=\s]+([\d,]+)", re.I),
         re.compile(r'"totalTokenCount"\s*:\s*([\d,]+)', re.I),
         re.compile(r'"tokenCount"\s*:\s*([\d,]+)', re.I),
-        re.compile(r"\busage\b[^\n\r]*\btotal\b[^\d]{0,16}([\d,]+)", re.I),
     )
     _TOKEN_IN_PATTERNS = (
         re.compile(r"input\s+tokens?[:=\s]+([\d,]+)", re.I),
@@ -833,13 +834,6 @@ async def async_main():
         if n is None:
             return
         session_tokens[provider] = session_tokens.get(provider, 0) + n
-        console.print(
-            Text(
-                f"[clogem] Tokens (~{provider} this call): {n}  "
-                f"(running total this turn ~{session_tokens[provider]})",
-                style=MUTED,
-            )
-        )
 
     def _token_turn_footer() -> None:
         """Summarize parsed token counts for the current user turn."""
@@ -856,6 +850,11 @@ async def async_main():
                     style=MUTED,
                 )
             )
+
+    def _llm_timeout(status_msg: str, explicit: Optional[int] = None, *, floor: int = 0) -> int:
+        """Research turns get a long quiet window. Other calls keep the configured timeout."""
+        base = explicit if explicit is not None else (_subprocess_timeout_sec() or 60)
+        return turn_timeout(status_msg, base, floor=floor)
 
     def _subprocess_timeout_sec() -> Optional[int]:
         return settings.subprocess_timeout_sec
@@ -886,32 +885,16 @@ async def async_main():
             console.print(msg)
 
     def live_reasoning_banner_build(task: str, mem_block: str) -> None:
-        preview = _task_preview(task, 88)
-        mem_on = bool(mem_block and mem_block.strip())
-        _say("")
-        _say("[clogem] Thinking (build)")
-        _say(f"  request: {preview}")
-        _say(
-            "  context: prior notes are included in Codex/Gemini prompts."
-            if mem_on
-            else "  context: no saved notes yet; using your message + rule files."
-        )
-        _say("  next: I will narrate each step on this log as it runs.")
-        _say("")
+        return
 
     def live_reasoning_banner_chat(task: str) -> None:
-        preview = _task_preview(task, 88)
-        _say("")
-        _say("[clogem] Thinking (conversation)")
-        _say(f"  request: {preview}")
-        _say("  next: showing routed reply below (no code pipeline).")
-        _say("")
+        return
 
     def trace_doing(msg: str) -> None:
-        _say(f"  {_wall_clock()} > {msg}")
+        logger.debug("doing: %s", msg)
 
     def trace_done(msg: str) -> None:
-        _say(f"  {_wall_clock()} ok {msg}")
+        logger.debug("done: %s", msg)
 
     async def trace_doing_async(msg: str) -> None:
         await asyncio.to_thread(trace_doing, msg)
@@ -953,10 +936,7 @@ async def async_main():
             _sys.stdout.write("\r\x1b[2K" + ln + "\n")
         _sys.stdout.flush()
 
-    _ACTIVITY_ROSE = "\033[38;2;190;85;85m"
-    _ACTIVITY_MUTED = "\033[38;2;168;138;138m"
-    _ACTIVITY_RESET = "\033[0m"
-    _ACTIVITY_FRAMES = ("✻", "✶", "✳", "✢")
+    _ACTIVITY_FRAMES = ACTIVITY_FRAMES
 
     def _activity_name(label: str) -> str:
         name = (label or "working").split(":", 1)[0].strip() or "working"
@@ -969,10 +949,10 @@ async def async_main():
 
         return activity_note(stderr, code)
 
-    def _mentions_api_key(text: str) -> bool:
-        from clogem.ui import mentions_api_key
+    def _gemini_error_is_final(text: str) -> bool:
+        from clogem.ui import gemini_error_is_final
 
-        return mentions_api_key(text)
+        return gemini_error_is_final(text)
 
     def _result_detail(out) -> str:
         parts = (
@@ -987,9 +967,13 @@ async def async_main():
         name = _activity_name(label)
         if ok:
             tail = f"  {elapsed:.0f}s" if elapsed >= 1 else ""
-            _sys.stdout.write(f"{_ACTIVITY_MUTED}  · {name}{tail}{_ACTIVITY_RESET}\n")
+            _sys.stdout.write(
+                f"{ACTIVITY_DIM}  ·  {name}{tail}{ACTIVITY_RESET}\n"
+            )
         else:
-            _sys.stdout.write(f"{_ACTIVITY_ROSE}  · {name}  {note}{_ACTIVITY_RESET}\n")
+            _sys.stdout.write(
+                f"{ACTIVITY_BAD}  ·  {name}  {note}{ACTIVITY_RESET}\n"
+            )
         _sys.stdout.flush()
         if not ok:
             logger.debug("activity failed label=%s note=%s", label, note)
@@ -1007,10 +991,10 @@ async def async_main():
             while not stop.is_set():
                 ch = _ACTIVITY_FRAMES[i % len(_ACTIVITY_FRAMES)]
                 _sys.stdout.write(
-                    f"\r\x1b[2K{_ACTIVITY_ROSE}  {ch} {name}{_ACTIVITY_RESET}"
+                    f"\r\x1b[2K  {ACTIVITY_ACCENT}{ch}{ACTIVITY_RESET}  {ACTIVITY_INK}{name}{ACTIVITY_RESET}"
                 )
                 _sys.stdout.flush()
-                time.sleep(0.16)
+                time.sleep(0.08)
                 i += 1
 
         th = threading.Thread(target=_spin, daemon=True)
@@ -1055,11 +1039,11 @@ async def async_main():
                     _render_team_status_board()
                 else:
                     _sys.stdout.write(
-                        f"\r\x1b[2K{_ACTIVITY_ROSE}  {ch} {name}{_ACTIVITY_RESET}"
+                        f"\r\x1b[2K  {ACTIVITY_ACCENT}{ch}{ACTIVITY_RESET}  {ACTIVITY_INK}{name}{ACTIVITY_RESET}"
                     )
                     _sys.stdout.flush()
                 i += 1
-                await asyncio.sleep(0.16)
+                await asyncio.sleep(0.08)
 
         spin_task = asyncio.create_task(_spin())
         out = None
@@ -1101,9 +1085,8 @@ async def async_main():
         """
         import sys as _sys
 
-        _say(f"[clogem] START: {label}")
-        t0 = time.monotonic()
         parts: List[str] = []
+        logger.debug("stream %s", label)
         _sys.stdout.write("\n")
         _sys.stdout.flush()
         try:
@@ -1115,13 +1098,9 @@ async def async_main():
         except Exception as exc:
             _sys.stdout.write("\n")
             _sys.stdout.flush()
-            elapsed = time.monotonic() - t0
-            _say(f"[clogem] DONE:  {label}  ({elapsed:.1f}s)")
             return "", str(exc), 1
         _sys.stdout.write("\n")
         _sys.stdout.flush()
-        elapsed = time.monotonic() - t0
-        _say(f"[clogem] DONE:  {label}  ({elapsed:.1f}s)")
         text = "".join(parts).strip()
         _record_tokens(provider, text)
         return text, "", 0
@@ -1137,12 +1116,11 @@ async def async_main():
         async def _run_async():
             kw = {"capture_output": True, "text": True}
             if to is not None:
-                # Gemini CLI requests (especially research-style prompts) can
-                # legitimately take longer than the default subprocess timeout.
-                # Codex build/generation turns can also exceed 60s for larger tasks.
-                if is_gemini_cli:
-                    floor = 300 if "research" in (status_msg or "").lower() else 120
-                    kw["timeout"] = max(to, floor)
+                low = (status_msg or "").lower()
+                if "research" in low:
+                    kw["timeout"] = max(to, 300)
+                elif is_gemini_cli:
+                    kw["timeout"] = max(to, 120)
                 elif is_codex_cli:
                     kw["timeout"] = max(to, 180)
                 else:
@@ -1216,7 +1194,7 @@ async def async_main():
         console.print(
             Text(
                 "Non-interactive Codex and Gemini runs usually need explicit permission: "
-                "Codex adds --full-auto (sandboxed workspace write + on-request commands). "
+                "Codex adds workspace write with automatic approval. "
                 "Gemini adds --yolo so headless tool steps are not stuck waiting for approval.",
                 style=MUTED,
             )
@@ -1238,7 +1216,7 @@ async def async_main():
         if not auto_permissions["granted"]:
             console.print(
                 Text(
-                    "Continuing without --full-auto / --yolo. If subprocesses hang or exit with "
+                    "Continuing without automatic Codex approval or Gemini --yolo. If subprocesses hang or exit with "
                     "approval errors, re-run with CLOGEM_AUTO_PERMISSIONS=yes.",
                     style=LOG_WARN,
                 )
@@ -1821,7 +1799,7 @@ async def async_main():
         base = _shlex_split_cmd(os.environ.get("CLOGEM_CODEX_CMD", "").strip()) or ["codex"]
         argv = base + ["exec", "--skip-git-repo-check"]
         if auto_permissions.get("granted"):
-            argv.append("--full-auto")
+            argv.extend(codex_permission_args(True))
         wd = os.environ.get("CLOGEM_CODEX_WORKDIR", "").strip()
         if wd:
             argv.extend(["-C", os.path.abspath(wd)])
@@ -1884,7 +1862,7 @@ async def async_main():
             or os.environ.get("CLOGEM_CODEX_SDK_MODEL", "").strip()
             or "gpt-4.1-mini"
         )
-        timeout = llm_timeout_sec or _subprocess_timeout_sec() or 60
+        timeout = _llm_timeout(status_msg, llm_timeout_sec)
 
         codex_cmd_parts = (
             _shlex_split_cmd(os.environ.get("CLOGEM_CODEX_CMD", "").strip()) or ["codex"]
@@ -1945,7 +1923,7 @@ async def async_main():
             or os.environ.get("CLOGEM_GEMINI_SDK_MODEL", "").strip()
             or "gemini-2.5-flash"
         )
-        timeout = llm_timeout_sec or _subprocess_timeout_sec() or 60
+        timeout = _llm_timeout(status_msg, llm_timeout_sec)
 
         gemini_cmd_parts = (
             _shlex_split_cmd(os.environ.get("CLOGEM_GEMINI_CMD", "").strip())
@@ -2007,7 +1985,7 @@ async def async_main():
             or os.environ.get("CLOGEM_GROK_SDK_MODEL", "").strip()
             or "grok-4.7"
         )
-        timeout = llm_timeout_sec or _subprocess_timeout_sec() or 60
+        timeout = _llm_timeout(status_msg, llm_timeout_sec)
 
         grok_cmd_parts = (
             _shlex_split_cmd(os.environ.get("CLOGEM_GROK_CMD", "").strip()) or ["grok"]
@@ -2066,7 +2044,7 @@ async def async_main():
             or os.environ.get("CLOGEM_GEMINI_SDK_MODEL", "").strip()
             or "gemini-2.5-flash"
         )
-        timeout = max(_subprocess_timeout_sec() or 60, 120)
+        timeout = _llm_timeout(status_msg, floor=120)
 
         use_async = settings.async_llm
 
@@ -2097,7 +2075,7 @@ async def async_main():
                         )
                     else:
                         r = await _run_sdk_async()
-                    if r.returncode != 0 and _mentions_api_key(r.error or ""):
+                    if r.returncode != 0 and _gemini_error_is_final(r.error or ""):
                         return "", r.error or "No API key was provided.", 1
                     if r.returncode != 0:
                         logger.debug(
@@ -2121,7 +2099,7 @@ async def async_main():
                 if backend == "sdk":
                     return "", r.error or "Gemini grounded call failed.", 1
             except Exception as e:
-                if _mentions_api_key(str(e)):
+                if _gemini_error_is_final(str(e)):
                     return "", str(e), 1
                 if use_async:
                     logger.debug(
@@ -2162,7 +2140,7 @@ async def async_main():
             or os.environ.get("CLOGEM_CLAUDE_SDK_MODEL", "").strip()
             or "claude-sonnet-4-6"
         )
-        timeout = llm_timeout_sec or _subprocess_timeout_sec() or 60
+        timeout = _llm_timeout(status_msg, llm_timeout_sec)
 
         def _run_sdk_sync():
             return claude_generate(prompt, sdk_model, timeout_sec=timeout)
@@ -2700,8 +2678,8 @@ Return project edits as:
     ):
 
         # Per-item styles stack with class:completion-menu.* (see prompt_toolkit layout/menus.py).
-        _CMP = "fg:#5ccfff"
-        _CMP_SEL = "fg:#ffffff bg:#345070 bold noreverse"
+        _CMP = "fg:#ece8e3"
+        _CMP_SEL = "fg:#1c1917 bg:#c47a6e bold noreverse"
 
         repo_root_for_symbols = _repo_root()
         symbol_index_box = {"idx": None}
@@ -2828,14 +2806,14 @@ Return project edits as:
         _completion_style = (
             Style.from_dict(
                 {
-                    "completion-menu": "bg:#000000 #cccccc",
+                    "completion-menu": "bg:#141210 #ece8e3",
                     "completion-menu.completion": "noreverse",
                     "completion-menu.completion.current": "noreverse",
                     "completion-menu.meta.completion": "noreverse",
                     "completion-menu.meta.completion.current": "noreverse",
-                    "completion-toolbar": "bg:#1a1a1a #888888",
-                    "completion-toolbar.completion": "fg:#5ccfff",
-                    "completion-toolbar.completion.current": "fg:#ffffff bg:#345070",
+                    "completion-toolbar": "bg:#1c1917 #9a948c",
+                    "completion-toolbar.completion": "fg:#ece8e3",
+                    "completion-toolbar.completion.current": "fg:#1c1917 bg:#c47a6e",
                 }
             )
             if Style is not None
@@ -2893,7 +2871,8 @@ Return project edits as:
                 style=_completion_style,
                 color_depth=_cd,
                 reserve_space_for_menu=14,
-                prompt_continuation="  ... ",
+                prompt_continuation="  │   ",
+                bottom_toolbar=input_outline()[2],
                 key_bindings=_task_prompt_keys,
             )
         except Exception:
@@ -2901,18 +2880,29 @@ Return project edits as:
             logger.debug("PromptSession unavailable; using plain input", exc_info=True)
             task_prompt_session = None
 
-    async def read_task_line(prompt: str = "What would you like to do? ") -> str:
+    async def read_task_line(prompt: str = "") -> str:
         if task_prompt_session is not None:
             try:
+                if prompt:
+                    shown = prompt
+                    continuation = "  │   "
+                    toolbar = None
+                else:
+                    shown, continuation, toolbar = input_outline()
                 return (
                     await task_prompt_session.prompt_async(
-                        prompt,
+                        shown,
                         set_exception_handler=False,
+                        prompt_continuation=continuation,
+                        bottom_toolbar=toolbar,
                     )
                 ).strip()
             except (EOFError, KeyboardInterrupt):
                 raise
-        prompt_label = Text(prompt, style=TITLE)
+        if prompt:
+            prompt_label = Text(prompt, style="#9a948c")
+        else:
+            prompt_label = Text("  › ", style="#c47a6e")
         return (await asyncio.to_thread(console.input, prompt_label)).strip()
 
     def extract_persist_directives(text: str):
@@ -3266,9 +3256,9 @@ Return project edits as:
 
         ctx = SessionJournal.format_resume_context(sessions[idx])
         console.print()
-        console.print(Rule("[bold green]Resuming session[/bold green]", style="green"))
+        console.print(Rule("resume", style=BORDER))
         console.print(Text(ctx, style=MUTED))
-        console.print(Rule(style="green"))
+        console.print(Rule(style=BORDER))
         console.print()
         return ctx
 
@@ -3636,7 +3626,6 @@ Return project edits as:
                 console.print(chat_reply or "(empty reply)")
                 console.print()
                 _token_turn_footer()
-                _say("[clogem] Turn finished. What would you like to do next?")
                 continue
 
             # ---------- /ask: conversational only (skip router + build pipeline) ----------
@@ -3674,7 +3663,6 @@ Return project edits as:
                 console.print(chat_reply or "(empty reply)")
                 console.print()
                 _token_turn_footer()
-                _say("[clogem] Turn finished. What would you like to do next?")
                 continue
 
             # ---------- /research: each model researches, then the orchestrator compiles ----------
@@ -3685,7 +3673,7 @@ Return project edits as:
                 panel = research_providers(orchestrator_provider=orch_provider)
                 import sys as _sys
 
-                _sys.stdout.write(f"{_ACTIVITY_MUTED}\n  Research{_ACTIVITY_RESET}\n")
+                _sys.stdout.write(f"{ACTIVITY_DIM}\n  Research{ACTIVITY_RESET}\n")
                 _sys.stdout.flush()
                 try:
                     research_raw, research_err, research_rc, reports_text = (
@@ -3722,7 +3710,6 @@ Return project edits as:
                 console.print(reply)
                 console.print()
                 _token_turn_footer()
-                _say("[clogem] Turn finished. What would you like to do next?")
                 continue
 
             if not (task or "").strip() and not attach_block:
@@ -3799,7 +3786,6 @@ Return project edits as:
                 console.print(chat_reply or "(empty reply)")
                 console.print()
                 _token_turn_footer()
-                _say("[clogem] Turn finished. What would you like to do next?")
                 continue
 
             trace_done(
@@ -4227,7 +4213,6 @@ Return project edits as:
                     memory, task, ", ".join(sorted(files.keys()))
                 )
                 _token_turn_footer()
-                _say("[clogem] Turn finished. What would you like to do next?")
                 continue
 
             code = extract_code(raw)
@@ -4530,8 +4515,6 @@ NEW:
 
             await auto_memory_after_code_session(memory, task, summary)
             _token_turn_footer()
-            _say("[clogem] Turn finished. What would you like to do next?")
-
         except KeyboardInterrupt:
             console.print()
             console.print(
@@ -4570,6 +4553,24 @@ NEW:
         _journal.close(memory_notes=format_memory_for_prompt(load_memory()))
     except Exception:
         pass
+
+
+def codex_permission_args(granted: object) -> list[str]:
+    """Codex flags for unattended workspace writes.
+
+    Codex 0.147 removed ``--full-auto``. ``--approve-for-me`` is the
+    replacement: automatic review inside the workspace-write sandbox.
+    """
+    if not granted:
+        return []
+    return ["--sandbox", "workspace-write", "--approve-for-me"]
+
+
+def turn_timeout(status_msg: str, base: int, *, floor: int = 0) -> int:
+    """Research is allowed to take several minutes. Other turns keep ``base``."""
+    if "research" in (status_msg or "").lower():
+        floor = max(floor, 300)
+    return max(int(base), floor, 1)
 
 
 def main() -> None:

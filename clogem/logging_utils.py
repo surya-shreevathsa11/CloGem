@@ -20,5 +20,9 @@ def get_logger(name: str) -> logging.Logger:
             level=level,
             format="%(asctime)s %(levelname)s %(name)s: %(message)s",
         )
+        # google-genai warns on every generate_content call about automatic
+        # function calling. That warning is library advice, not a Clogem error.
+        logging.getLogger("google.genai").setLevel(logging.ERROR)
+        logging.getLogger("google_genai").setLevel(logging.ERROR)
         _CONFIGURED = True
     return logging.getLogger(name)

@@ -175,7 +175,7 @@ Require the `vector` optional dependency group (`pip install ".[vector]"`) and `
 |----------|---------|-----------------|
 | `ANTHROPIC_API_KEY` | — | Required for Claude SDK calls |
 | `CLOGEM_ALLOW_LOCAL_COMMANDS` | `""` (ask) | Pre-approve local command execution (`yes`/`no`) |
-| `CLOGEM_AUTO_PERMISSIONS` | `""` (ask) | Pre-approve `--full-auto` (Codex) and `--yolo` (Gemini) (`yes`/`no`) |
+| `CLOGEM_AUTO_PERMISSIONS` | `""` (ask) | Pre-approve Codex workspace write (`--approve-for-me`) and Gemini `--yolo` (`yes`/`no`) |
 | `CLOGEM_CLAUDE_MODEL` | — | Claude model ID at startup |
 | `CLOGEM_CODEX_BACKEND` | `auto` | `auto` / `sdk` / `cli` — how Codex calls are made |
 | `CLOGEM_CODEX_MODEL` | — | Codex model ID at startup |

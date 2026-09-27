@@ -86,6 +86,37 @@ def test_missing_api_key_skips_the_gemini_retry_and_stays_short():
     assert rc == 0
     assert compiled == "compiled"
     assert "needs an API key" in reports
+
+
+def test_rejected_api_key_skips_the_gemini_retry():
+    calls: list[str] = []
+
+    async def run_provider(provider: str, prompt: str, status: str):
+        calls.append(status)
+        if "best-effort" in status:
+            raise AssertionError("gemini was retried after a rejected API key")
+        if "compile one answer" in prompt.lower():
+            return "compiled", "", 0
+        return f"{provider} ok", "", 0
+
+    async def run_gemini_grounded(prompt: str, status: str):
+        return "", "401 UNAUTHENTICATED. {'error': {'code': 401, 'message': 'Request had invalid authentication credentials.'}}", 1
+
+    compiled, _err, rc, reports = asyncio.run(
+        conduct_multi_model_research(
+            question="topic",
+            sources="",
+            providers=["codex", "gemini"],
+            orchestrator_provider="codex",
+            local_block="now",
+            run_provider=run_provider,
+            run_gemini_grounded=run_gemini_grounded,
+        )
+    )
+    assert rc == 0
+    assert compiled == "compiled"
+    assert "API key was rejected" in reports
+    assert "401" not in reports
     assert "https://" not in reports
 
 

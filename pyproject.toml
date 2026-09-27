@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "clogem"
-version = "0.1.3"
+version = "0.1.4"
 description = "Clogem CLI: Codex + Gemini workflow with validation and repo awareness"
 readme = "README.md"
 requires-python = ">=3.10"

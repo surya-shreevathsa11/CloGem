@@ -78,16 +78,24 @@ def test_god_mode_session_run_auto_yes(monkeypatch):
     assert session.run_auto_yes is True
 
 
-def test_god_mode_codex_argv_includes_full_auto():
-    """When auto_permissions are granted (god mode), --full-auto appears in codex argv."""
-    auto_permissions = {"granted": True}
+def test_research_turns_wait_longer_than_a_short_chat() -> None:
+    from clogem.cli import turn_timeout
 
-    # Replicate the _codex_argv logic from cli.py
-    argv = ["codex", "exec", "--skip-git-repo-check"]
-    if auto_permissions.get("granted"):
-        argv.append("--full-auto")
+    assert turn_timeout("Gemini: /research (web-grounded)...", 60, floor=120) == 300
+    assert turn_timeout("Orchestrator: verifying and compiling research...", 60) == 300
+    assert turn_timeout("chat", 60) == 60
+    assert turn_timeout("weather", 60, floor=120) == 120
 
-    assert "--full-auto" in argv
+
+def test_god_mode_codex_argv_uses_current_permission_flags():
+    """Granted permissions use the flags Codex 0.147+ accepts."""
+    from clogem.cli import codex_permission_args
+
+    argv = ["codex", "exec", "--skip-git-repo-check", *codex_permission_args(True)]
+
+    assert "--full-auto" not in argv
+    assert argv[-3:] == ["--sandbox", "workspace-write", "--approve-for-me"]
+    assert codex_permission_args(False) == []
 
 
 def test_god_mode_gemini_argv_includes_yolo():

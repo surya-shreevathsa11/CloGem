@@ -319,7 +319,7 @@ export CLOGEM_GEMINI_BACKEND="sdk"   # use SDK, not the CLI Google-login path
 export OPENAI_API_KEY="sk-..."       # optional: enables Codex SDK backend
 # export ANTHROPIC_API_KEY="..."     # only if you map roles to Claude
 # export XAI_API_KEY="..."           # only if you use the Grok API instead of the grok CLI
-# export CLOGEM_AUTO_PERMISSIONS=no  # set this if your Codex CLI rejects --full-auto (e.g. v0.147+)
+# export CLOGEM_AUTO_PERMISSIONS=yes  # workspace write + automatic approval, and Gemini --yolo
 ```
 
 Reload the shell: `source ~/.zshrc`.
@@ -332,7 +332,7 @@ Reload the shell: `source ~/.zshrc`.
 | `command not found: clogem` after pipx | Run `pipx ensurepath`, restart Terminal, check `echo $PATH`. |
 | Live weather/news not grounded | Set `CLOGEM_GEMINI_BACKEND=sdk` (not `auto` — with the Gemini CLI installed, `auto` picks the CLI path and does not use the SDK key) and set `GEMINI_API_KEY`. |
 | npm `ENOTEMPTY` / rename error during `npm install -g @openai/codex` or `@google/gemini-cli` | Remove stuck directories and reinstall: `sudo rm -rf /usr/local/lib/node_modules/@openai/codex /usr/local/lib/node_modules/@openai/.codex-* /usr/local/lib/node_modules/@google/gemini-cli /usr/local/lib/node_modules/@google/.gemini-cli-*` then `sudo npm install -g @openai/codex @google/gemini-cli`. |
-| `unexpected argument '--full-auto'` from Codex CLI | Newer Codex CLIs (e.g. v0.147+) reject `--full-auto`. Set `CLOGEM_AUTO_PERMISSIONS=no` and avoid `clogem --god-mode` / `clogem-god-mode` until a code fix lands. If prompted for auto-permissions during a session, answer `n`. |
+| `unexpected argument '--full-auto'` from Codex CLI | Update Clogem. Current releases pass `--sandbox workspace-write` and `--approve-for-me` instead of the removed `--full-auto` flag. |
 | Codex 401 / `refresh_token_reused` error | Run `codex logout` then `codex login` to refresh credentials. |
 | Gemini "client is no longer supported" or Code Assist individuals error | Personal Google login on Gemini CLI is deprecated (June 2026). Use an AI Studio API key: `export GEMINI_API_KEY=<key>` and `export CLOGEM_GEMINI_BACKEND=sdk`. Do not install Antigravity CLI as a Clogem workaround — it is not supported by Clogem. |
 
@@ -986,7 +986,7 @@ pip install ".[vector]"
 
 | Variable                            | Purpose                                                                                                                                          |
 | ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `CLOGEM_AUTO_PERMISSIONS`            | `yes` / `no` — skip the interactive prompt for Codex `--full-auto` and Gemini `--yolo`. **Note:** when `yes` (or `--god-mode`), Clogem currently passes `--full-auto` to Codex, which newer Codex CLIs (e.g. v0.147+) reject. Prefer `CLOGEM_AUTO_PERMISSIONS=no` until a code fix lands. |
+| `CLOGEM_AUTO_PERMISSIONS`            | `yes` / `no` — skip the interactive prompt. `yes` gives Codex workspace write with `--approve-for-me`, and Gemini `--yolo`. |
 | `CLOGEM_ALLOW_LOCAL_COMMANDS`        | `yes` / `no` — allow local command execution for `/run`, `/test`, `/lint`, `/github/clone`, and build-time artifact auto-run                     |
 | `CLOGEM_RUN_POLICY`                  | strict by default; set `relaxed` to allow legacy broad `/run` command behavior                                                                   |
 | `CLOGEM_CODEX_WORKDIR`               | Absolute path passed to Codex `-C` (workspace root)                                                                                              |
@@ -1079,4 +1079,4 @@ pip install ".[vector]"
 
 **Keys (SDK):** `export OPENAI_API_KEY=...` · `export GEMINI_API_KEY=...` (or `GOOGLE_API_KEY`)  
 
-**Gemini for individuals:** `export GEMINI_API_KEY=...` · `export CLOGEM_GEMINI_BACKEND=sdk` · `export CLOGEM_AUTO_PERMISSIONS=no` (if your Codex CLI rejects `--full-auto`)  
+**Gemini for individuals:** `export GEMINI_API_KEY=...` · `export CLOGEM_GEMINI_BACKEND=sdk`  
