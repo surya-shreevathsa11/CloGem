@@ -345,6 +345,58 @@ async def claude_generate_async(
     )
 
 
+_XAI_BASE_URL = "https://api.x.ai/v1"
+
+
+def _xai_api_key() -> str:
+    return os.environ.get("XAI_API_KEY", "").strip()
+
+
+def grok_generate(prompt: str, model: str, timeout_sec: Optional[int] = None) -> LLMResult:
+    key = _xai_api_key()
+    if not key:
+        return LLMResult("", "XAI_API_KEY is not set.", 1)
+    try:
+        from openai import OpenAI
+    except Exception as e:
+        logger.debug("OpenAI SDK import failed for Grok", exc_info=True)
+        return LLMResult("", f"OpenAI SDK import failed: {e}", 1)
+
+    def _once() -> LLMResult:
+        try:
+            client = OpenAI(api_key=key, base_url=_XAI_BASE_URL)
+            rsp = client.chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": "You are a precise coding assistant."},
+                    {"role": "user", "content": prompt},
+                ],
+                timeout=timeout_sec or 60,
+            )
+            text = ""
+            try:
+                text = (rsp.choices[0].message.content or "").strip()
+            except Exception:
+                logger.debug("Grok response content extraction failed", exc_info=True)
+                text = ""
+            if not text:
+                text = str(rsp)
+            return LLMResult(text, "", 0)
+        except Exception as e:
+            return LLMResult("", str(e), 1)
+
+    return _run_with_retries(_once, "grok_generate")
+
+
+async def grok_generate_async(
+    prompt: str, model: str, timeout_sec: Optional[int] = None
+) -> LLMResult:
+    return await _run_with_retries_async(
+        lambda: asyncio.to_thread(grok_generate, prompt, model, timeout_sec),
+        "grok_generate_async",
+    )
+
+
 async def openai_stream_async(
     prompt: str, model: str, timeout_sec: Optional[int] = None
 ) -> AsyncGenerator[str, None]:
@@ -408,6 +460,33 @@ async def claude_stream_async(
         async for text in stream.text_stream:
             if text:
                 yield text
+
+
+async def grok_stream_async(
+    prompt: str, model: str, timeout_sec: Optional[int] = None
+) -> AsyncGenerator[str, None]:
+    """Yield text chunks from the xAI API as they arrive. Raises on error."""
+    key = _xai_api_key()
+    if not key:
+        raise RuntimeError("XAI_API_KEY is not set.")
+    try:
+        from openai import AsyncOpenAI
+    except Exception as e:
+        raise RuntimeError(f"OpenAI SDK import failed: {e}") from e
+    client = AsyncOpenAI(api_key=key, base_url=_XAI_BASE_URL)
+    stream = await client.chat.completions.create(
+        model=model,
+        messages=[
+            {"role": "system", "content": "You are a precise coding assistant."},
+            {"role": "user", "content": prompt},
+        ],
+        stream=True,
+        timeout=timeout_sec or 60,
+    )
+    async for chunk in stream:
+        delta = chunk.choices[0].delta.content if chunk.choices else None
+        if delta:
+            yield delta
 
 
 def _guess_mime_type_for_image_path(image_path: str) -> str:

@@ -24,17 +24,22 @@ Use these at the start of your message to control how that turn is handled:
 - `/claude/model`: show Claude model status (SDK only)
 - `/claude/model <MODEL_ID>`: set Claude model for this session
 - `/claude/model reset`: restore startup/default Claude model
+- `/grok/model`: show Grok model status (CLI or xAI API)
+- `/grok/model <MODEL_ID>`: set Grok model for this session
+- `/grok/model reset`: restore startup/default Grok model
 
 ## Role mapping commands
 
 - `/roles`: show active role to provider mapping
 - `/roles/<role>/<provider>`: set provider for one role in-session
   - Roles: `orchestrator`, `planner`, `coder`, `reviewer`, `summariser`
-  - Providers: `codex`, `gemini`, `claude`
+  - Providers: `codex`, `gemini`, `claude`, `grok`
   - Example: `/roles/orchestrator/claude`
   - Alias supported: `cover` maps to `coder` (`/roles/cover/claude`)
 
 If you map a role to `claude` and `ANTHROPIC_API_KEY` is missing, Clogem prompts you to enter it for the current session.
+
+If you map a role to `grok` and neither the `grok` CLI nor `XAI_API_KEY` is available, Clogem prompts for an xAI API key. With the CLI installed, sign in via `grok` (browser). The API path is separate and billed through console.x.ai.
 
 - `/config`: show parsed effective runtime settings (includes config file sources)
 

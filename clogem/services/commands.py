@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import json
 from typing import Optional, Tuple
@@ -163,6 +164,49 @@ def handle_pre_pipeline_command(task: str, ctx: CommandContext) -> Tuple[bool, b
         console.print(Text(f"Claude LLM set to: {rest}", style=TITLE))
         return True, False
 
+    if task.startswith("/grok/model"):
+        rest = task[len("/grok/model") :].strip()
+        models = ctx.models
+        _grok_model = ctx._grok_model
+        if not rest:
+            console.print(
+                Text(
+                    "Grok LLM — CLI when `grok` is on PATH, otherwise the xAI API (XAI_API_KEY).",
+                    style=MUTED,
+                )
+            )
+            console.print(
+                Text(
+                    f"  This session: {models.get('grok') or 'default (CLI default / grok-4.7 on SDK)'}",
+                    style=MUTED,
+                )
+            )
+            console.print(
+                Text(
+                    f"  From startup (--grok-model / CLOGEM_GROK_MODEL): {_grok_model or '(none)'}",
+                    style=MUTED,
+                )
+            )
+            console.print(
+                Text(
+                    "  Usage: /grok/model <MODEL_ID>   or   /grok/model reset",
+                    style=MUTED,
+                )
+            )
+            return True, False
+        if rest.lower() == "reset":
+            models["grok"] = _grok_model
+            console.print(
+                Text(
+                    f"Grok LLM reset to: {models.get('grok') or 'default'}",
+                    style=TITLE,
+                )
+            )
+            return True, False
+        models["grok"] = rest
+        console.print(Text(f"Grok LLM set to: {rest}", style=TITLE))
+        return True, False
+
     if task.strip().lower() == "/roles":
         role_provider_map = ctx.role_provider_map
         console.print()
@@ -175,7 +219,7 @@ def handle_pre_pipeline_command(task: str, ctx: CommandContext) -> Tuple[bool, b
         console.print(
             Text(
                 "Set a role provider with: /roles/<role>/<provider> "
-                "(roles: orchestrator, planner, coder, reviewer, summariser; providers: codex, gemini, claude)",
+                "(roles: orchestrator, planner, coder, reviewer, summariser; providers: codex, gemini, claude, grok)",
                 style=MUTED,
             )
         )
@@ -222,7 +266,7 @@ def handle_pre_pipeline_command(task: str, ctx: CommandContext) -> Tuple[bool, b
         role_aliases = {"cover": "coder"}
         role = role_aliases.get(role_in, role_in)
         valid_roles = {"orchestrator", "planner", "coder", "reviewer", "summariser"}
-        valid_providers = {"codex", "gemini", "claude"}
+        valid_providers = {"codex", "gemini", "claude", "grok"}
 
         if role not in valid_roles:
             console.print(
@@ -235,7 +279,7 @@ def handle_pre_pipeline_command(task: str, ctx: CommandContext) -> Tuple[bool, b
         if provider not in valid_providers:
             console.print(
                 Text(
-                    "Unknown provider. Use one of: codex, gemini, claude",
+                    "Unknown provider. Use one of: codex, gemini, claude, grok",
                     style=LOG_WARN,
                 )
             )
@@ -274,6 +318,32 @@ def handle_pre_pipeline_command(task: str, ctx: CommandContext) -> Tuple[bool, b
                         style=LOG_WARN,
                     )
                 )
+        if provider == "grok" and not os.environ.get("XAI_API_KEY", "").strip():
+            grok_cmd = os.environ.get("CLOGEM_GROK_CMD", "").strip()
+            grok_exe = grok_cmd.split()[0] if grok_cmd else "grok"
+            grok_cli = bool(shutil.which(grok_exe) or os.path.isfile(grok_exe))
+            if not grok_cli:
+                console.print(
+                    Text(
+                        "Grok selected but the grok CLI is not on PATH and XAI_API_KEY is not set.",
+                        style=LOG_WARN,
+                    )
+                )
+                key_val = ""
+                try:
+                    key_val = (console.input("Paste xAI API key now (leave blank to skip): ") or "").strip()
+                except Exception:
+                    key_val = ""
+                if key_val:
+                    os.environ["XAI_API_KEY"] = key_val
+                    console.print(Text("XAI_API_KEY set for this session.", style=LOG_OK))
+                else:
+                    console.print(
+                        Text(
+                            "Grok mapping saved. Install the grok CLI or set XAI_API_KEY before Grok calls.",
+                            style=LOG_WARN,
+                        )
+                    )
         return True, False
 
     if task.startswith("/repo/info"):

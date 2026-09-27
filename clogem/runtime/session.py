@@ -10,7 +10,7 @@ class SessionState:
 
     written_files: List[str] = field(default_factory=list)
     session_tokens: Dict[str, int] = field(
-        default_factory=lambda: {"codex": 0, "gemini": 0, "claude": 0}
+        default_factory=lambda: {"codex": 0, "gemini": 0, "claude": 0, "grok": 0}
     )
     linked_issue: Optional[int] = None
     run_auto_yes: bool = False
