@@ -8,6 +8,8 @@ You are a **pair programmer and code reviewer** for Clogem, invoked by Claude (O
 
 ## Project
 
+Clogem is one product in two places. The CLI is this repository (`npm-cli/`). The website is the private repo `surya-shreevathsa11/clogem-web`, checked out here as `web/`. A shared behavior is not finished until both places implement it and their tests pass. Read `npm-cli/docs/same-product.md` before changing research, roles, commands, or website drafting.
+
 Clogem is a Python CLI tool that orchestrates OpenAI Codex and Google Gemini into a structured code generation workflow with review, validation, and context management.
 
 - **Source:** `clogem/` package

@@ -50,6 +50,32 @@ def _report_body(text: str, err: str, rc: int) -> str:
     return body
 
 
+def research_check_note(reports: Sequence[Tuple[str, str]]) -> str:
+    """Same note the website shows under a research reply.
+
+    Keep this in step with web/src/logic/research.js compileResearch.
+    """
+    usable = [(provider, text.strip()) for provider, text in reports if (text or "").strip()]
+    if not usable:
+        return "No model answered."
+    if len(usable) == 1:
+        return "It was not cross-checked."
+    groups: List[dict] = []
+    for provider, text in usable:
+        key = " ".join(text.split()).strip().lower()
+        for group in groups:
+            if group["key"] == key:
+                group["who"].append(provider)
+                break
+        else:
+            groups.append({"key": key, "text": text, "who": [provider]})
+    if len(groups) == 1:
+        return "they agreed"
+    kept = sorted(groups, key=lambda group: (len(group["who"]), len(group["text"])), reverse=True)[0]
+    split = "\n".join(f"{', '.join(group['who'])} held: {group['text']}" for group in groups)
+    return f"{split}\nKept the claim from {', '.join(kept['who'])}."
+
+
 def format_research_reports(reports: Sequence[Tuple[str, str, str, int]]) -> str:
     blocks: List[str] = []
     for provider, text, err, rc in reports:
@@ -121,7 +147,7 @@ async def conduct_multi_model_research(
     Each provider researches independently. The orchestrator then verifies
     conflicts and returns one compiled answer.
 
-    Returns (compiled_text, error, returncode, reports_text).
+    Returns (compiled_text, error, returncode, reports_text, check_note).
     """
     question = (question or "(no question)").strip()
     sources = (sources or "").strip()
@@ -183,6 +209,20 @@ async def conduct_multi_model_research(
                 break
     if rc != 0 or is_model_dump(compiled or ""):
         usable = visible_research_reply("", reports)
+        note = research_check_note(
+            [
+                (provider, text)
+                for provider, text, _err, provider_rc in reports
+                if provider_rc == 0 and (text or "").strip() and not is_model_dump(text)
+            ]
+        )
         if usable:
-            return usable, "", 0, reports_text
-    return compiled or "", err or "", rc, reports_text
+            return usable, "", 0, reports_text, note
+    note = research_check_note(
+        [
+            (provider, text)
+            for provider, text, _err, provider_rc in reports
+            if provider_rc == 0 and (text or "").strip() and not is_model_dump(text)
+        ]
+    )
+    return compiled or "", err or "", rc, reports_text, note

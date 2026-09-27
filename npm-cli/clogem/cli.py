@@ -3676,7 +3676,7 @@ Return project edits as:
                 _sys.stdout.write(f"{ACTIVITY_DIM}\n  Research{ACTIVITY_RESET}\n")
                 _sys.stdout.flush()
                 try:
-                    research_raw, research_err, research_rc, reports_text = (
+                    research_raw, research_err, research_rc, reports_text, research_note = (
                         await conduct_multi_model_research(
                             question=research_task_body,
                             sources=sources,
@@ -3708,6 +3708,8 @@ Return project edits as:
                 section_rule("Reply (/research)")
                 console.print()
                 console.print(reply)
+                if (research_note or "").strip():
+                    console.print(Text(research_note.strip(), style=MUTED))
                 console.print()
                 _token_turn_footer()
                 continue

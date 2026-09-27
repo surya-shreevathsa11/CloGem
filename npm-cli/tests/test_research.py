@@ -5,6 +5,7 @@ import asyncio
 from clogem.services.research import (
     conduct_multi_model_research,
     format_research_reports,
+    research_check_note,
     research_providers,
 )
 
@@ -72,7 +73,7 @@ def test_missing_api_key_skips_the_gemini_retry_and_stays_short():
     async def run_gemini_grounded(prompt: str, status: str):
         return "", "No API key was provided. Please pass a valid API key.", 1
 
-    compiled, _err, rc, reports = asyncio.run(
+    compiled, _err, rc, reports, _note = asyncio.run(
         conduct_multi_model_research(
             question="topic",
             sources="",
@@ -102,7 +103,7 @@ def test_rejected_api_key_skips_the_gemini_retry():
     async def run_gemini_grounded(prompt: str, status: str):
         return "", "401 UNAUTHENTICATED. {'error': {'code': 401, 'message': 'Request had invalid authentication credentials.'}}", 1
 
-    compiled, _err, rc, reports = asyncio.run(
+    compiled, _err, rc, reports, _note = asyncio.run(
         conduct_multi_model_research(
             question="topic",
             sources="",
@@ -133,7 +134,7 @@ def test_compile_falls_back_when_the_orchestrator_dumps_its_model_list():
     async def run_gemini_grounded(prompt: str, status: str):
         return "", "No API key was provided.", 1
 
-    compiled, _err, rc, reports = asyncio.run(
+    compiled, _err, rc, reports, _note = asyncio.run(
         conduct_multi_model_research(
             question="how the world was made",
             sources="",
@@ -173,7 +174,7 @@ def test_each_model_researches_then_orchestrator_compiles_conflicts():
         calls.append(("gemini-grounded", prompt))
         return "Gemini says 4", "", 0
 
-    compiled, err, rc, reports = asyncio.run(
+    compiled, err, rc, reports, _note = asyncio.run(
         conduct_multi_model_research(
             question="How many moons?",
             sources="",
@@ -218,7 +219,7 @@ def test_one_researcher_failure_still_reaches_the_compiler():
     async def run_gemini_grounded(prompt: str, status: str):
         return "", "no search", 1
 
-    compiled, err, rc, reports = asyncio.run(
+    compiled, err, rc, reports, _note = asyncio.run(
         conduct_multi_model_research(
             question="topic",
             sources="",
@@ -250,7 +251,7 @@ def test_attached_sources_skip_web_grounding():
     async def run_gemini_grounded(prompt: str, status: str):
         raise AssertionError("web grounding must not run when @ sources are attached")
 
-    compiled, err, rc, reports = asyncio.run(
+    compiled, err, rc, reports, _note = asyncio.run(
         conduct_multi_model_research(
             question="What does the note say?",
             sources="[S1] notes.md\nThe note says blue.",
@@ -269,3 +270,13 @@ def test_attached_sources_skip_web_grounding():
     assert any("The note says blue." in prompt for prompt in calls)
     assert "The note says blue." in calls[-1]
     assert "gemini sourced" in reports
+
+
+def test_research_check_note_matches_the_website():
+    assert research_check_note([("codex", "Mauve.")]) == "It was not cross-checked."
+    assert research_check_note([("codex", "Mauve."), ("gemini", "Mauve.")]) == "they agreed"
+    note = research_check_note([("codex", "Orange."), ("gemini", "Mauve.")])
+    assert "codex held: Orange." in note
+    assert "gemini held: Mauve." in note
+    assert note.endswith("Kept the claim from codex.") or note.endswith("Kept the claim from gemini.")
+
