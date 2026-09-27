@@ -38,17 +38,19 @@ Clogem is an **orchestrator**: it calls external models through **named roles**.
 | Role | Default provider | Role in the app |
 |------|------------------|-----------------|
 | **orchestrator** | Codex | Turn routing (build vs chat), `/ask`-style chat, memory, and lightweight classifiers |
-| **planner** | Codex | Planning step before implementation when the pipeline runs |
+| **planner** | Grok (Codex if Grok is missing) | Planning step before implementation. Grok is used when the `grok` CLI or `XAI_API_KEY` is available; otherwise this role stays on Codex. |
 | **coder** | Codex | Draft code, apply diffs, improvement passes after review |
 | **reviewer** | Gemini | **Independent** review of generated code (security, design, consistency) |
 | **summariser** | Gemini | Short summaries of outcomes and diffs |
 
 **Claude** is **optional**. It is used only when you assign one or more roles to `claude` (for example `coder=claude`) via `--role-provider` or `CLOGEM_ROLE_PROVIDER_MAP`. Claude runs through the **Anthropic SDK** only (`ANTHROPIC_API_KEY`); there is no separate `claude` CLI inside Clogem.
 
+**Grok** plans by default. It is a coding agent (Grok Build): strong at turning a task into a concrete plan, tool use, and a second opinion that is neither the Codex drafter nor the Gemini reviewer. When `grok` is on `PATH`, Clogem calls `grok -p …` after `grok` browser login. If the CLI is missing and `XAI_API_KEY` is unset, the planner falls back to Codex and Clogem still starts. The xAI API (`https://api.x.ai/v1`) is pay-per-token and is not the free grok.com chat quota. Set `CLOGEM_GROK_BACKEND=sdk` to force the API. Map other roles with `--role-provider coder=grok` if you want Grok to draft as well.
+
 ### How a typical **build** turn flows
 
 1. **Router** (usually the orchestrator on **Codex**) classifies the message as **BUILD** (run the pipeline) or **CHAT** (reply only).
-2. **Planner / coder** (**Codex** by default) produces or edits code.
+2. **Planner** (**Grok** when installed, otherwise **Codex**) outlines the change. **Coder** (**Codex**) produces or edits code.
 3. **Reviewer** (**Gemini**) audits the result without having authored it.
 4. **Coder** (**Codex**) applies improvements informed by review.
 5. **Summariser** (**Gemini**) condenses what changed.
@@ -62,6 +64,7 @@ Pure chat turns skip the code pipeline when the router says **CHAT**. Special ca
 | **Codex** | `codex exec …` (**CLI**) and/or **OpenAI SDK** (`CLOGEM_CODEX_BACKEND=auto\|sdk\|cli`) |
 | **Gemini** | `gemini …` (**CLI**) and/or **Google GenAI SDK** (`CLOGEM_GEMINI_BACKEND=auto\|sdk\|cli`) — review, summary, optional grounded “today” answers |
 | **Claude** | **Anthropic SDK only** (`CLOGEM_CLAUDE_BACKEND=sdk`) |
+| **Grok** | `grok -p …` (**CLI**, browser login) and/or **xAI API** via the OpenAI SDK (`CLOGEM_GROK_BACKEND=auto\|sdk\|cli`, `XAI_API_KEY`) |
 
 In **`auto`**, Clogem prefers the **CLI** when it is available and falls back to the SDK only if the CLI is not found. For Gemini, this means `auto` uses the `gemini` CLI path even when `GEMINI_API_KEY` is set — which fails for personal accounts whose CLI Google login is deprecated. **Individuals must set `CLOGEM_GEMINI_BACKEND=sdk`** and provide `GEMINI_API_KEY` or `GOOGLE_API_KEY`.
 
@@ -153,7 +156,8 @@ ai_automation/
 | **Node.js + npm** | Installs the **Codex** and **Gemini** CLIs globally (`@openai/codex`, `@google/gemini-cli`). |
 | **Codex CLI** (`codex`) | OpenAI Codex — drafting and orchestration (`codex exec …`). |
 | **Gemini CLI** (`gemini`) | Google Gemini — review and summaries (`gemini -p …`). Still useful as a CLI backend for enterprise / Code Assist setups. For **personal accounts**, the "Sign in with Google" flow on Gemini CLI is deprecated (June 2026); use an API key + SDK instead (see below). |
-| **API keys** | For **individuals**: `GEMINI_API_KEY` (from [AI Studio](https://aistudio.google.com/apikey)) is the recommended Gemini path — set `CLOGEM_GEMINI_BACKEND=sdk` (not `auto`; see below). Also: `OPENAI_API_KEY` for the Codex SDK path; optional `ANTHROPIC_API_KEY` for Claude roles. |
+| **Grok CLI** (`grok`) | Optional but recommended. Default **planner** when installed. Install script: `curl -fsSL https://x.ai/cli/install.sh \| bash`, then `grok` to sign in. Without it, planning stays on Codex. |
+| **API keys** | For **individuals**: `GEMINI_API_KEY` (from [AI Studio](https://aistudio.google.com/apikey)) is the recommended Gemini path — set `CLOGEM_GEMINI_BACKEND=sdk` (not `auto`; see below). Also: `OPENAI_API_KEY` for the Codex SDK path; optional `ANTHROPIC_API_KEY` for Claude roles; optional `XAI_API_KEY` for the Grok API when the `grok` CLI is not used. |
 
 On **Windows**, you can use **WSL** (below) or native installs if `python3`, `pipx`, `node`, `codex`, and `gemini` are on your `PATH`.
 
@@ -168,11 +172,13 @@ Do these **in order** the first time you set up the machine.
 3. **Clone** this repository and `cd` into the project root.
 4. **Install Clogem**: `pipx install -e . --force` (use `--python "$(command -v python3.12)"` on macOS if the default Python is too old).
 5. **Install Codex + Gemini CLIs** globally with npm (see [Part B](#part-b--nodejs-and-npm-for-codex--gemini-clis)).
-6. **Sign in or set keys**:
+6. **Install the Grok CLI** (planner). See [Grok CLI](#grok-cli-planner-role).
+7. **Sign in or set keys**:
    - **Codex:** run `codex login` (or `codex` once) and complete sign-in per the upstream prompts.
    - **Gemini (individuals):** personal Google login on Gemini CLI is deprecated as of June 2026. Instead, create an API key at <https://aistudio.google.com/apikey>, then `export GEMINI_API_KEY=<your-key>` and `export CLOGEM_GEMINI_BACKEND=sdk`.
    - **OpenAI SDK** (optional): `export OPENAI_API_KEY=<your-key>` if you want the Codex SDK backend in addition to the CLI.
-7. **Verify**: run `clogem` — the boot sequence checks for Codex and Gemini availability.
+   - **Grok:** run `grok` once and finish browser sign-in. Optional API instead of the CLI: `export XAI_API_KEY=<your-key>`.
+8. **Verify**: run `clogem` — the boot sequence checks for Codex and Gemini availability. Grok is checked only when a role still maps to it.
 
 **Optional — development dependencies** (running tests from a clone): create a venv and run `pip install -e ".[dev]"` (see `pyproject.toml`). This is separate from the `pipx` install you use day-to-day.
 
@@ -259,6 +265,16 @@ gemini --version
 
 Authenticate **Codex** by running `codex login` and completing the sign-in flow. (Do not attempt the Gemini CLI Google login for personal accounts — see step 4.)
 
+Install the Grok CLI (used for planning when it is present):
+
+```bash
+curl -fsSL https://x.ai/cli/install.sh | bash
+export PATH="$HOME/.grok/bin:$PATH"
+grok --version
+```
+
+Then run `grok` once and complete browser sign-in. If you skip this, Clogem keeps planning on Codex.
+
 ### 4. API keys (recommended for individuals)
 
 Personal Google login on Gemini CLI is deprecated as of June 2026. **Individuals must use an AI Studio API key** with the SDK backend.
@@ -270,6 +286,7 @@ export GEMINI_API_KEY="..."          # https://aistudio.google.com/apikey — re
 export CLOGEM_GEMINI_BACKEND="sdk"   # use SDK, not the CLI Google-login path
 export OPENAI_API_KEY="sk-..."       # optional: enables Codex SDK backend
 # export ANTHROPIC_API_KEY="..."     # only if you map roles to Claude
+# export XAI_API_KEY="..."           # only if you use the Grok API instead of the grok CLI
 # export CLOGEM_AUTO_PERMISSIONS=no  # set this if your Codex CLI rejects --full-auto (e.g. v0.147+)
 ```
 
@@ -424,6 +441,54 @@ See also the upstream [authentication guide](https://github.com/google-gemini/ge
 
 ---
 
+## Grok CLI (planner role)
+
+Grok is the default **planner** when the CLI (or `XAI_API_KEY`) is available. Codex still drafts and Gemini still reviews.
+
+### Install
+
+macOS and Linux:
+
+```bash
+curl -fsSL https://x.ai/cli/install.sh | bash
+```
+
+The binary lands in `~/.grok/bin`. The installer adds that directory to your shell config. Open a new terminal, or run:
+
+```bash
+export PATH="$HOME/.grok/bin:$PATH"
+grok --version
+```
+
+Windows (PowerShell):
+
+```powershell
+irm https://x.ai/cli/install.ps1 | iex
+```
+
+### Sign in
+
+```bash
+grok
+```
+
+Finish the browser login. Headless checks:
+
+```bash
+grok -p "Reply with exactly: ok"
+```
+
+Without `grok` and without `XAI_API_KEY`, Clogem starts normally and the planner stays on Codex.
+
+To force the paid API instead of the CLI:
+
+```bash
+export XAI_API_KEY="xai-..."
+export CLOGEM_GROK_BACKEND=sdk
+```
+
+---
+
 ## Part E — This project (`clogem`)
 
 You should already have followed [Full installation](#full-installation-end-to-end) and [Uninstalling old packages](#uninstalling-old-packages-devai-cogem-and-clogem). This section is the short version.
@@ -555,13 +620,13 @@ pipx install -e . --force
 
 ### LLM models and role/provider mapping
 
-Clogem supports three providers (`codex`, `gemini`, `claude`) and five roles:
+Clogem supports four providers (`codex`, `gemini`, `claude`, `grok`) and five roles:
 `orchestrator`, `planner`, `coder`, `reviewer`, `summariser`.
 
 Default role map:
 
 - `orchestrator=codex`
-- `planner=codex`
+- `planner=grok` (falls back to Codex when the Grok CLI and `XAI_API_KEY` are both missing)
 - `coder=codex`
 - `reviewer=gemini`
 - `summariser=gemini`
@@ -579,6 +644,7 @@ Model overrides:
 | **Codex**        | `--codex-model` / `CLOGEM_CODEX_MODEL`      | Any role mapped to `codex`                         |
 | **Gemini**       | `--gemini-model` / `CLOGEM_GEMINI_MODEL`    | Any role mapped to `gemini`                        |
 | **Claude (SDK)** | `--claude-model` / `CLOGEM_CLAUDE_MODEL`    | Any role mapped to `claude` (SDK-only, no CLI fallback) |
+| **Grok**         | `--grok-model` / `CLOGEM_GROK_MODEL`        | Any role mapped to `grok` (CLI when `grok` is on PATH, else xAI API) |
 
 
 - **If you do not set a model** for a backend, clogem **does not pass `-m`** for that CLI, so **that tool’s default model** is used (same as running `codex` / `gemini` without `-m`).
@@ -587,6 +653,7 @@ Model overrides:
 ```bash
 clogem --codex-model o3 --gemini-model gemini-2.5-pro
 clogem --role-provider coder=claude --role-provider reviewer=gemini --claude-model claude-sonnet-4-6
+clogem --role-provider coder=grok
 ```
 
 Only one backend:
@@ -606,9 +673,11 @@ Clogem supports SDK backends for OpenAI, Google GenAI, and Anthropic.
 - `CLOGEM_GEMINI_BACKEND=auto|sdk|cli` (default `auto`)
 - `CLOGEM_GEMINI_REALTIME=1` (default on): questions that look like **live weather or news** are answered with **Gemini + Google Search grounding** (SDK path only), using your machine’s **local date/time** so “today” matches your clock. Set `0` to disable. Grounding needs a Gemini API key (`GEMINI_API_KEY` / `GOOGLE_API_KEY`) and billing per Google’s pricing; use `gemini-2.5-flash` or another [supported model](https://ai.google.dev/gemini-api/docs/google-search).
 - `CLOGEM_CLAUDE_BACKEND=sdk` (Claude is SDK-only)
+- `CLOGEM_GROK_BACKEND=auto|sdk|cli` (default `auto`; prefers the `grok` CLI, else the xAI API)
 - `CLOGEM_CODEX_SDK_MODEL` (default `gpt-4.1-mini`)
 - `CLOGEM_GEMINI_SDK_MODEL` (default `gemini-2.5-flash`)
 - `CLOGEM_CLAUDE_SDK_MODEL` (default `claude-sonnet-4-6`)
+- `CLOGEM_GROK_SDK_MODEL` (default `grok-4.7`)
 
 In `auto` mode, Clogem prefers the **CLI** when it is on `PATH` and falls back to SDK only if the CLI is unavailable. For Gemini, this means a working `gemini` CLI install takes precedence over `GEMINI_API_KEY` — individuals whose personal Google login is deprecated must set `CLOGEM_GEMINI_BACKEND=sdk` explicitly.
 For SDK mode you need:
@@ -616,6 +685,7 @@ For SDK mode you need:
 - OpenAI: `OPENAI_API_KEY`
 - Google GenAI: `GEMINI_API_KEY` or `GOOGLE_API_KEY`
 - Anthropic: `ANTHROPIC_API_KEY`
+- xAI (Grok SDK path): `XAI_API_KEY`
 
 Router secondary intent classifier:
 
@@ -646,6 +716,9 @@ While Clogem is running, you can change models without restarting:
 | `/claude/model`                            | Show Claude LLM (SDK), this session, and startup default                      |
 | `/claude/model <MODEL_ID>`                 | Use that ID for **all Claude SDK** calls this session                         |
 | `/claude/model reset`                      | Restore Claude model from `--claude-model` / `CLOGEM_CLAUDE_MODEL`             |
+| `/grok/model`                              | Show Grok LLM (CLI or SDK), this session, and startup default                 |
+| `/grok/model <MODEL_ID>`                   | Use that ID for **all Grok** calls this session                                |
+| `/grok/model reset`                        | Restore Grok model from `--grok-model` / `CLOGEM_GROK_MODEL`                    |
 | `/roles`                                   | Show active role-to-provider mapping                                           |
 | `/roles/<role>/<provider>`                 | Set role provider in-session (example: `/roles/orchestrator/claude`)          |
 | `/config`                                  | Show effective runtime settings (parsed config snapshot)                       |
@@ -888,13 +961,16 @@ pip install ".[vector]"
 | `CLOGEM_CODEX_MODEL`                 | Default Codex LLM ID when `--codex-model` is not passed                                                                                          |
 | `CLOGEM_GEMINI_MODEL`                | Default Gemini LLM ID when `--gemini-model` is not passed                                                                                        |
 | `CLOGEM_CLAUDE_MODEL`                | Default Claude LLM ID when `--claude-model` is not passed                                                                                        |
+| `CLOGEM_GROK_MODEL`                  | Default Grok LLM ID when `--grok-model` is not passed                                                                                            |
 | `CLOGEM_ROLE_PROVIDER_MAP`           | Role mapping override: comma-separated `role=provider` pairs (e.g. `coder=claude,reviewer=gemini`)                                             |
 | `CLOGEM_CODEX_BACKEND`               | Backend mode for codex provider: `auto|sdk|cli`                                                                                                  |
 | `CLOGEM_GEMINI_BACKEND`              | Backend mode for gemini provider: `auto\|sdk\|cli`. **Individuals should set `sdk`** and provide `GEMINI_API_KEY`; personal Google login on the CLI is deprecated (June 2026). |
 | `CLOGEM_CLAUDE_BACKEND`              | Backend mode for claude provider: `sdk`                                                                                                          |
+| `CLOGEM_GROK_BACKEND`                | Backend mode for grok provider: `auto\|sdk\|cli`. `auto` uses the `grok` CLI when it is on PATH, otherwise the xAI API.                          |
 | `CLOGEM_CODEX_SDK_MODEL`             | SDK model used by codex provider when using OpenAI SDK                                                                                           |
 | `CLOGEM_GEMINI_SDK_MODEL`            | SDK model used by gemini provider when using Google GenAI SDK                                                                                    |
 | `CLOGEM_CLAUDE_SDK_MODEL`            | SDK model used by claude provider when using Anthropic SDK                                                                                       |
+| `CLOGEM_GROK_SDK_MODEL`              | SDK model used by grok provider when using the xAI API (default `grok-4.7`)                                                                     |
 | `CLOGEM_SUBPROCESS_TIMEOUT_SEC`      | Integer seconds; abort a stuck `codex` / `gemini` subprocess after this time                                                                     |
 | `CLOGEM_STREAM_DIFFS`                | `1`/`0` — stream a live unified diff during Codex improvements (opt-in; only when stdout is a TTY)                                               |
 | `CLOGEM_VALIDATION_DOCKER`           | `yes` / `no` — prefer Docker-based validation backend (tests/lint/typecheck). See `--validation-docker`                                          |
@@ -964,6 +1040,8 @@ pip install ".[vector]"
 **Python + pipx (WSL/Linux):** `sudo apt install -y python3 python3-pip pipx && pipx ensurepath`  
 
 **Codex + Gemini CLIs:** `npm install -g @openai/codex @google/gemini-cli`  
+
+**Grok CLI (planner):** `curl -fsSL https://x.ai/cli/install.sh | bash` then `grok` to sign in  
 
 **Clogem (any OS, from repo root):** `pipx install -e . --force` then `clogem`  
 

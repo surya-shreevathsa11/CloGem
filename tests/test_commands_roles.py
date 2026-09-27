@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+
 from clogem.services.contracts import CommandContext
 from clogem.services.commands import handle_pre_pipeline_command
 
@@ -26,10 +28,11 @@ def _ctx(console: _FakeConsole, role_provider_map: dict[str, str]) -> CommandCon
         LOG_ERR="err",
         LOG_OK="ok",
         section_rule=lambda *_: None,
-        models={"codex": None, "gemini": None, "claude": None},
+        models={"codex": None, "gemini": None, "claude": None, "grok": None},
         _codex_model=None,
         _gemini_model=None,
         _claude_model=None,
+        _grok_model=None,
         role_provider_map=role_provider_map,
         settings=None,
         _repo_root=lambda: ".",
@@ -109,3 +112,32 @@ def test_config_command_prints_settings_json():
     assert should_exit is False
     joined = "\n".join(console.lines)
     assert "async_llm" in joined
+
+
+def test_roles_grok_prompts_for_api_key_when_cli_missing(monkeypatch):
+    monkeypatch.delenv("XAI_API_KEY", raising=False)
+    monkeypatch.setenv("CLOGEM_GROK_CMD", "/tmp/definitely-missing-grok")
+    monkeypatch.setattr("clogem.services.commands.shutil.which", lambda _exe: None)
+    console = _FakeConsole(input_value="xai-test-key")
+    role_map = {"coder": "codex"}
+
+    try:
+        handled, should_exit = handle_pre_pipeline_command(
+            "/roles/coder/grok",
+            _ctx(console, role_map),
+        )
+        assert handled is True
+        assert should_exit is False
+        assert role_map["coder"] == "grok"
+        assert "XAI_API_KEY set for this session." in "\n".join(console.lines)
+    finally:
+        os.environ.pop("XAI_API_KEY", None)
+
+
+def test_grok_model_command_sets_session_model():
+    console = _FakeConsole()
+    ctx = _ctx(console, {"coder": "grok"})
+    handled, should_exit = handle_pre_pipeline_command("/grok/model grok-4.3", ctx)
+    assert handled is True
+    assert should_exit is False
+    assert ctx.models["grok"] == "grok-4.3"

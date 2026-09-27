@@ -83,8 +83,16 @@ async def async_main():
         openai_generate,
         openai_generate_async,
         openai_stream_async,
+        grok_generate,
+        grok_stream_async,
     )
-    from clogem.role_mapping import needed_providers, resolve_role_provider_map
+    from clogem.role_mapping import (
+        explicit_role_names,
+        fallback_default_grok,
+        grok_provider_available,
+        needed_providers,
+        resolve_role_provider_map,
+    )
     from clogem.services.commands import handle_pre_pipeline_command
     from clogem.services.contracts import (
         CommandContext,
@@ -116,9 +124,10 @@ async def async_main():
             "  clogem\n"
             "  clogem --codex-model o3 --gemini-model gemini-2.5-pro\n"
             "  clogem --role-provider coder=claude --claude-model claude-sonnet-4-6\n"
+            "  clogem --role-provider coder=grok\n"
             "\n"
-            "Env (when flags omitted): CLOGEM_CODEX_MODEL, CLOGEM_GEMINI_MODEL, CLOGEM_CLAUDE_MODEL\n"
-            "Valid IDs depend on your codex/gemini CLI and account; see `codex exec --help` and `gemini --help`."
+            "Env (when flags omitted): CLOGEM_CODEX_MODEL, CLOGEM_GEMINI_MODEL, CLOGEM_CLAUDE_MODEL, CLOGEM_GROK_MODEL\n"
+            "Valid IDs depend on your codex/gemini/grok CLI and account; see `codex exec --help`, `gemini --help`, and `grok --help`."
         ),
     )
     _ap.add_argument(
@@ -149,13 +158,22 @@ async def async_main():
         ),
     )
     _ap.add_argument(
+        "--grok-model",
+        metavar="MODEL_ID",
+        default=None,
+        help=(
+            "LLM for Grok. Passed as `grok -m MODEL_ID` on the CLI path, or used as the "
+            "xAI API model on the SDK path. Omit to use the CLI default or grok-4.7 on SDK."
+        ),
+    )
+    _ap.add_argument(
         "--role-provider",
         metavar="ROLE=PROVIDER",
         action="append",
         default=[],
         help=(
             "Map a role to a provider; repeatable. Roles: orchestrator, planner, coder, reviewer, summariser. "
-            "Providers: codex, gemini, claude."
+            "Providers: codex, gemini, claude, grok."
         ),
     )
     _ap.add_argument(
@@ -206,6 +224,7 @@ async def async_main():
     _codex_model = (_args.codex_model or os.environ.get("CLOGEM_CODEX_MODEL") or "").strip() or None
     _gemini_model = (_args.gemini_model or os.environ.get("CLOGEM_GEMINI_MODEL") or "").strip() or None
     _claude_model = (_args.claude_model or os.environ.get("CLOGEM_CLAUDE_MODEL") or "").strip() or None
+    _grok_model = (_args.grok_model or os.environ.get("CLOGEM_GROK_MODEL") or "").strip() or None
 
     from clogem.config_loader import load_settings as _load_settings
     _cli_overrides: dict = {}
@@ -238,10 +257,24 @@ async def async_main():
 
     loop.set_exception_handler(_loop_exception_handler)
 
+    _role_env = os.environ.get("CLOGEM_ROLE_PROVIDER_MAP", "")
+    _role_cli = list(_args.role_provider or [])
     role_provider_map = resolve_role_provider_map(
-        env_map_raw=os.environ.get("CLOGEM_ROLE_PROVIDER_MAP", ""),
-        cli_pairs=list(_args.role_provider or []),
+        env_map_raw=_role_env,
+        cli_pairs=_role_cli,
     )
+    if not grok_provider_available():
+        _before = dict(role_provider_map)
+        role_provider_map = fallback_default_grok(
+            role_provider_map,
+            explicit_role_names(env_map_raw=_role_env, cli_pairs=_role_cli),
+        )
+        if role_provider_map != _before:
+            sys.stdout.write(
+                "clogem: Grok is not available, so planner uses Codex. "
+                "Install the grok CLI or set XAI_API_KEY to plan with Grok.\n"
+            )
+            sys.stdout.flush()
     stitch_feature_on = (not _args.no_stitch) and (
         (os.environ.get("CLOGEM_STITCH") or "1").strip().lower()
         not in ("0", "false", "no", "off", "disabled")
@@ -309,7 +342,7 @@ async def async_main():
             pass
 
     # Best-effort token totals per provider (parsed from CLI output when present).
-    session_tokens = {"codex": 0, "gemini": 0, "claude": 0}
+    session_tokens = {"codex": 0, "gemini": 0, "claude": 0, "grok": 0}
     # None = not asked yet; True/False = user chose whether to pass Codex --full-auto and Gemini --yolo.
     auto_permissions: dict = {"granted": True if settings.god_mode else None}
     # None = not asked yet; True/False = user chose whether clogem can execute local shell commands (/run, /test, /lint, /github/clone).
@@ -318,7 +351,7 @@ async def async_main():
     if settings.god_mode:
         session.run_auto_yes = True
     # Effective LLM IDs for this process (separate per backend); from CLI/env, change with /codex/model and /gemini/model.
-    models: dict = {"codex": _codex_model, "gemini": _gemini_model, "claude": _claude_model}
+    models: dict = {"codex": _codex_model, "gemini": _gemini_model, "claude": _claude_model, "grok": _grok_model}
 
     def _llm_status_line(human: str, cli_hint: str, model_id: Optional[str]) -> str:
         """human = short label; cli_hint = codex|gemini for messages."""
@@ -787,7 +820,8 @@ async def async_main():
         """Summarize parsed token counts for the current user turn."""
         c = int(session_tokens.get("codex", 0) or 0)
         g = int(session_tokens.get("gemini", 0) or 0)
-        if c == 0 and g == 0:
+        k = int(session_tokens.get("grok", 0) or 0)
+        if c == 0 and g == 0 and k == 0:
             console.print(
                 Text(
                     "[clogem] Token usage: no counts found in CLI output this turn "
@@ -799,7 +833,7 @@ async def async_main():
             console.print(
                 Text(
                     f"[clogem] Token estimates this turn (parsed from CLI text): "
-                    f"codex ~{c}, gemini ~{g}",
+                    f"codex ~{c}, gemini ~{g}, grok ~{k}",
                     style=MUTED,
                 )
             )
@@ -1749,6 +1783,16 @@ async def async_main():
         argv.extend(["-p", prompt])
         return argv
 
+    def _grok_argv(prompt: str) -> List[str]:
+        """Headless Grok CLI. Do not pass Codex/Gemini permission flags."""
+        base = _shlex_split_cmd(os.environ.get("CLOGEM_GROK_CMD", "").strip()) or ["grok"]
+        argv = list(base)
+        gm = models.get("grok")
+        if gm:
+            argv.extend(["-m", gm])
+        argv.extend(["-p", prompt])
+        return argv
+
     def _run_proc(args: List[str], cwd: Optional[str] = None):
         """subprocess.run with same optional timeout as Codex/Gemini."""
         kw = {"capture_output": True, "text": True}
@@ -1887,6 +1931,67 @@ async def async_main():
         stdout, stderr, rc = await run_cmd(_gemini_argv(prompt), status_msg)
         combined = (stdout or "") + "\n" + (stderr or "")
         _record_tokens("gemini", combined)
+        return (stdout or "").strip(), stderr or "", rc
+
+    async def run_grok(
+        prompt: str,
+        status_msg: str,
+        *,
+        llm_timeout_sec: Optional[int] = None,
+        stream: bool = True,
+    ) -> Tuple[str, str, int]:
+        backend = settings.grok_backend
+        sdk_model = (
+            models.get("grok")
+            or os.environ.get("CLOGEM_GROK_SDK_MODEL", "").strip()
+            or "grok-4.7"
+        )
+        timeout = llm_timeout_sec or _subprocess_timeout_sec() or 60
+
+        grok_cmd_parts = (
+            _shlex_split_cmd(os.environ.get("CLOGEM_GROK_CMD", "").strip()) or ["grok"]
+        )
+        grok_exe = grok_cmd_parts[0] if grok_cmd_parts else "grok"
+        grok_cli_available = bool(shutil.which(grok_exe) or os.path.isfile(grok_exe))
+
+        def _run_sdk_sync():
+            return grok_generate(prompt, sdk_model, timeout_sec=timeout)
+
+        # auto prefers the CLI when `grok` is installed (browser login / free CLI quota).
+        # SDK is the paid XAI_API_KEY path, used when the CLI is missing or backend=sdk.
+        should_try_sdk = backend == "sdk" or (
+            backend == "auto" and not grok_cli_available
+        )
+
+        if should_try_sdk:
+            try:
+                if settings.stream_output and stream and status_msg:
+                    text, err, rc = await _stream_sdk_response(
+                        status_msg,
+                        "grok",
+                        lambda: grok_stream_async(prompt, sdk_model, timeout_sec=timeout),
+                    )
+                    if rc == 0:
+                        return text, "", 0
+                    logger.debug("Grok streaming failed; falling back to non-streaming. error=%s", err)
+
+                r = (
+                    _run_with_ascii_progress(status_msg, _run_sdk_sync)
+                    if status_msg
+                    else _run_sdk_sync()
+                )
+                if r.returncode == 0:
+                    _record_tokens("grok", r.text or "")
+                    return (r.text or "").strip(), "", 0
+                if backend == "sdk":
+                    return "", r.error or "Grok SDK call failed.", 1
+            except Exception as e:
+                if backend == "sdk":
+                    return "", str(e), 1
+
+        stdout, stderr, rc = await run_cmd(_grok_argv(prompt), status_msg)
+        combined = (stdout or "") + "\n" + (stderr or "")
+        _record_tokens("grok", combined)
         return (stdout or "").strip(), stderr or "", rc
 
     async def run_gemini_grounded(prompt: str, status_msg: str) -> Tuple[str, str, int]:
@@ -2037,6 +2142,8 @@ async def async_main():
             return await run_gemini(prompt, status_msg, llm_timeout_sec=llm_timeout_sec, stream=stream)
         if provider == "claude":
             return await run_claude(prompt, status_msg, llm_timeout_sec=llm_timeout_sec, stream=stream)
+        if provider == "grok":
+            return await run_grok(prompt, status_msg, llm_timeout_sec=llm_timeout_sec, stream=stream)
         return "", f"Unsupported provider for role {role}: {provider}", 1
 
     def extract_code(text):
@@ -2322,6 +2429,7 @@ Return project edits as:
         ("/codex/model", "Show or set Codex LLM (draft + improve)"),
         ("/gemini/model", "Show or set Gemini LLM (review + summary)"),
         ("/claude/model", "Show or set Claude LLM (SDK only)"),
+        ("/grok/model", "Show or set Grok LLM (CLI or SDK)"),
         ("/roles", "Show active role->provider mapping"),
         ("/config", "Show effective runtime config values"),
         ("/roles/<role>/<provider>", "Set role provider inline (e.g. /roles/orchestrator/claude)"),
@@ -3167,6 +3275,7 @@ Return project edits as:
                         "/codex/model <MODEL_ID|reset>   "
                         "/gemini/model <MODEL_ID|reset>   "
                         "/claude/model <MODEL_ID|reset>   "
+                        "/grok/model <MODEL_ID|reset>   "
                         "/roles   /roles/<role>/<provider>   /config   "
                         "/repo/info /test /lint   "
                         "/run <cmd>   "
@@ -3221,6 +3330,7 @@ Return project edits as:
                 _codex_model=_codex_model,
                 _gemini_model=_gemini_model,
                 _claude_model=_claude_model,
+                _grok_model=_grok_model,
                 role_provider_map=role_provider_map,
                 settings=settings,
                 _repo_root=_repo_root,
@@ -3360,6 +3470,7 @@ Return project edits as:
             session_tokens["codex"] = 0
             session_tokens["gemini"] = 0
             session_tokens["claude"] = 0
+            session_tokens["grok"] = 0
 
             ensure_auto_permissions()
 

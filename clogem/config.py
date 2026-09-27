@@ -43,9 +43,11 @@ class Settings:
     codex_backend: str = "auto"
     gemini_backend: str = "auto"
     claude_backend: str = "sdk"
+    grok_backend: str = "auto"
     codex_sdk_model: str = "gpt-4.1-mini"
     gemini_sdk_model: str = "gemini-2.5-flash"
     claude_sdk_model: str = "claude-sonnet-4-6"
+    grok_sdk_model: str = "grok-4.7"
     async_llm: bool = True
     secondary_intent_llm: bool = True
     router_classifier_model: str = "gemini-2.5-flash-lite"
@@ -102,6 +104,11 @@ class Settings:
                 "sdk",
                 ("sdk",),
             ),
+            grok_backend=_as_choice(
+                os.environ.get("CLOGEM_GROK_BACKEND"),
+                "auto",
+                ("auto", "sdk", "cli"),
+            ),
             codex_sdk_model=(
                 os.environ.get("CLOGEM_CODEX_SDK_MODEL", "").strip() or "gpt-4.1-mini"
             ),
@@ -112,6 +119,9 @@ class Settings:
             claude_sdk_model=(
                 os.environ.get("CLOGEM_CLAUDE_SDK_MODEL", "").strip()
                 or "claude-sonnet-4-6"
+            ),
+            grok_sdk_model=(
+                os.environ.get("CLOGEM_GROK_SDK_MODEL", "").strip() or "grok-4.7"
             ),
             async_llm=_as_bool(os.environ.get("CLOGEM_ASYNC_LLM"), True),
             secondary_intent_llm=_as_bool(

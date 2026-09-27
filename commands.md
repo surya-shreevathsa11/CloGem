@@ -42,7 +42,7 @@ Prefix your message with one of these to override how that turn is routed. They 
 
 ## Model commands
 
-Change which LLM is used for each provider mid-session. Changes apply from the next turn onward. Startup defaults come from `--codex-model` / `--gemini-model` / `--claude-model` flags or their `CLOGEM_*_MODEL` env vars.
+Change which LLM is used for each provider mid-session. Changes apply from the next turn onward. Startup defaults come from `--codex-model` / `--gemini-model` / `--claude-model` / `--grok-model` flags or their `CLOGEM_*_MODEL` env vars.
 
 | Command | What it does | How to enable |
 |---------|-------------|---------------|
@@ -55,6 +55,9 @@ Change which LLM is used for each provider mid-session. Changes apply from the n
 | `/gemini/model` | Show current Gemini model and startup default | Always available |
 | `/gemini/model <MODEL_ID>` | Set Gemini model for this session | Always available |
 | `/gemini/model reset` | Restore Gemini model to startup default | Always available |
+| `/grok/model` | Show current Grok model and startup default | Grok CLI on PATH, or `XAI_API_KEY` for the API |
+| `/grok/model <MODEL_ID>` | Set Grok model for this session | Same as above |
+| `/grok/model reset` | Restore Grok model to startup default | Same as above |
 
 ---
 
@@ -64,7 +67,7 @@ Change which LLM is used for each provider mid-session. Changes apply from the n
 |---------|-------------|---------------|
 | `/config` | Show all effective runtime settings, their values, and which config sources (env, TOML file, CLI) set them | Always available |
 | `/roles` | Show the current role-to-provider mapping for this session | Always available |
-| `/roles/<role>/<provider>` | Remap a role to a different provider inline | Always available. Roles: `orchestrator` `planner` `coder` `reviewer` `summariser`. Providers: `codex` `gemini` `claude`. Example: `/roles/reviewer/claude` |
+| `/roles/<role>/<provider>` | Remap a role to a different provider inline | Always available. Roles: `orchestrator` `planner` `coder` `reviewer` `summariser`. Providers: `codex` `gemini` `claude` `grok`. Example: `/roles/coder/grok` |
 
 ---
 

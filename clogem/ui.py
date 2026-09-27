@@ -135,6 +135,17 @@ def boot_sequence(required_providers: set[str] | None = None) -> bool:
             logger.debug("Anthropic SDK readiness check failed", exc_info=True)
             return False
 
+    def _grok_sdk_ready() -> bool:
+        if not os.environ.get("XAI_API_KEY", "").strip():
+            return False
+        try:
+            import openai  # noqa: F401
+
+            return True
+        except Exception:
+            logger.debug("Grok SDK readiness check failed", exc_info=True)
+            return False
+
     sys.stdout.write("\n")
     sys.stdout.flush()
 
@@ -210,6 +221,25 @@ def boot_sequence(required_providers: set[str] | None = None) -> bool:
             )
             sys.stdout.write(
                 f"{_BOOT_MUTED}Set ANTHROPIC_API_KEY and install anthropic SDK.{_BOOT_RESET}\n"
+            )
+            sys.stdout.flush()
+            return False
+
+    if "grok" in req:
+        grok_ready = _boot_run_step(
+            "loading grok",
+            lambda: _cmd_exists(os.environ.get("CLOGEM_GROK_CMD", ""), "grok")
+            or _grok_sdk_ready(),
+            min_spin=0.35,
+        )
+        if not grok_ready:
+            sys.stdout.write("\n")
+            sys.stdout.flush()
+            sys.stdout.write(
+                f"{_BOOT_ERR}clogem cannot start: grok provider unavailable.{_BOOT_RESET}\n"
+            )
+            sys.stdout.write(
+                f"{_BOOT_MUTED}Install the Grok CLI (grok) or set XAI_API_KEY.{_BOOT_RESET}\n"
             )
             sys.stdout.flush()
             return False

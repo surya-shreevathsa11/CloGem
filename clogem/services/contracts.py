@@ -102,6 +102,7 @@ class CommandContext:
     _codex_model: Optional[str]
     _gemini_model: Optional[str]
     _claude_model: Optional[str]
+    _grok_model: Optional[str]
     role_provider_map: Dict[str, str]
     settings: Any
     _repo_root: Callable[[], str]

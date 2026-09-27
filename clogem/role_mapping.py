@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import shutil
 from typing import Dict, Iterable, List, Sequence, Set, Tuple
 
 
@@ -10,11 +12,11 @@ ROLES: Tuple[str, ...] = (
     "reviewer",
     "summariser",
 )
-PROVIDERS: Tuple[str, ...] = ("codex", "gemini", "claude")
+PROVIDERS: Tuple[str, ...] = ("codex", "gemini", "claude", "grok")
 
 DEFAULT_ROLE_PROVIDER_MAP: Dict[str, str] = {
     "orchestrator": "codex",
-    "planner": "codex",
+    "planner": "grok",
     "coder": "codex",
     "reviewer": "gemini",
     "summariser": "gemini",
@@ -70,4 +72,37 @@ def needed_providers(role_provider_map: Dict[str, str], roles: Iterable[str] | N
     for role in use_roles:
         provider = role_provider_map.get(role, DEFAULT_ROLE_PROVIDER_MAP[role])
         out.add(provider)
+    return out
+
+
+def explicit_role_names(*, env_map_raw: str, cli_pairs: Sequence[str]) -> Set[str]:
+    """Roles the user set via env or CLI, as opposed to the built-in defaults."""
+    names = set(parse_role_provider_map_env(env_map_raw))
+    names.update(parse_role_provider_pairs(list(cli_pairs)))
+    return names
+
+
+def grok_provider_available() -> bool:
+    """True when the Grok CLI is on PATH or an xAI API key is set."""
+    if os.environ.get("XAI_API_KEY", "").strip():
+        return True
+    raw = os.environ.get("CLOGEM_GROK_CMD", "").strip()
+    exe = raw.split()[0] if raw else "grok"
+    return bool(shutil.which(exe) or os.path.isfile(exe))
+
+
+def fallback_default_grok(
+    role_provider_map: Dict[str, str],
+    explicit_roles: Set[str],
+) -> Dict[str, str]:
+    """
+    When Grok is unavailable, roles that default to grok fall back to Codex.
+
+    An explicit ``planner=grok`` (or any other explicit grok mapping) is left
+    alone so boot can report that Grok is required.
+    """
+    out = dict(role_provider_map)
+    for role, provider in list(out.items()):
+        if provider == "grok" and role not in explicit_roles:
+            out[role] = "codex"
     return out
