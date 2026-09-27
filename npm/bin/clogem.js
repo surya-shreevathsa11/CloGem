@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 "use strict";
 
-const { spawnSync } = require("child_process");
+const { spawn, spawnSync } = require("child_process");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
@@ -44,6 +44,59 @@ function run(cmd, args) {
   return result.status == null ? 1 : result.status;
 }
 
+function runQuiet(cmd, args, label) {
+  const rose = "\x1b[38;2;190;85;85m";
+  const soft = "\x1b[38;2;255;175;175m";
+  const reset = "\x1b[0m";
+  const frames = ["·  ", "·· ", "···", " ··", "  ·"];
+  const tty = process.stdout.isTTY;
+
+  return new Promise((resolve) => {
+    let frame = 0;
+    const timer = tty
+      ? setInterval(() => {
+          process.stdout.write(`\r${rose}  ${label} ${soft}${frames[frame % frames.length]}${reset}`);
+          frame += 1;
+        }, 180)
+      : null;
+    if (!tty) {
+      process.stdout.write(`${label}\n`);
+    }
+    const child = spawn(cmd, args, {
+      env: {
+        ...process.env,
+        PIP_DISABLE_PIP_VERSION_CHECK: "1",
+        PIP_PROGRESS_BAR: "off",
+        PIP_NO_COLOR: "1",
+      },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let log = "";
+    child.stdout.on("data", (chunk) => {
+      log += chunk;
+    });
+    child.stderr.on("data", (chunk) => {
+      log += chunk;
+    });
+    child.on("error", (err) => {
+      if (timer) {
+        clearInterval(timer);
+      }
+      process.stdout.write("\r\x1b[2K");
+      resolve({ code: 1, log: err.message });
+    });
+    child.on("close", (code) => {
+      if (timer) {
+        clearInterval(timer);
+      }
+      if (tty) {
+        process.stdout.write("\r\x1b[2K");
+      }
+      resolve({ code: code == null ? 1 : code, log });
+    });
+  });
+}
+
 function pythonIsNewEnough(python) {
   const check = spawnSync(python, [
     "-c",
@@ -61,7 +114,7 @@ function copyTree(from, to) {
   });
 }
 
-function ensureApp() {
+async function ensureApp() {
   const version = JSON.parse(fs.readFileSync(path.join(pkgRoot, "package.json"), "utf8")).version;
   let installed = "";
   try {
@@ -83,18 +136,34 @@ function ensureApp() {
     copyTree(path.join(pkgRoot, name), path.join(appDir, name));
   }
   if (!fs.existsSync(venvPython())) {
-    if (run(python, ["-m", "venv", venvDir]) !== 0) {
+    const created = await runQuiet(python, ["-m", "venv", venvDir], "preparing");
+    if (created.code !== 0) {
+      if (created.log.trim()) {
+        console.error(created.log.trim());
+      }
       fail("Could not create a virtualenv.");
     }
   }
-  if (run(venvPython(), ["-m", "pip", "install", "-e", appDir]) !== 0) {
+  const installedPkg = await runQuiet(
+    venvPython(),
+    ["-m", "pip", "install", "-q", "--progress-bar", "off", "--disable-pip-version-check", "-e", appDir],
+    "installing",
+  );
+  if (installedPkg.code !== 0) {
+    const tail = installedPkg.log.trim().split("\n").slice(-20).join("\n");
+    if (tail) {
+      console.error(tail);
+    }
     fail("Could not install the Clogem Python package.");
+  }
+  if (process.stdout.isTTY) {
+    process.stdout.write("\x1b[38;2;190;85;85m  ready\x1b[0m\n");
   }
   fs.writeFileSync(versionFile, `${version}\n`);
 }
 
-function main() {
-  ensureApp();
+async function main() {
+  await ensureApp();
   const args = process.argv.slice(2).filter((arg) => arg !== "--skip-setup");
   const marker = path.join(dataDir, "setup-done");
   const wantsSetup = args[0] === "setup";
