@@ -183,6 +183,12 @@ Setup asks before it installs anything else:
 
 Run `clogem setup` again any time. `clogem --skip-setup` skips the first-run wizard.
 
+When a new version is published, update from the terminal. This replaces the installed copy and refreshes the private app on the next start. You do not uninstall or delete anything first.
+
+```bash
+clogem update
+```
+
 ## Full installation from a git clone (end-to-end)
 
 Do these **in order** the first time you set up the machine.

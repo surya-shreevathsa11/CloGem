@@ -47,6 +47,12 @@ def test_format_research_reports_keeps_failures_as_missing_evidence():
     assert "failed" in text
 
 
+def test_format_research_reports_truncates_a_huge_report():
+    text = format_research_reports([("codex", "x" * 7000, "", 0)])
+    assert "...[truncated]" in text
+    assert len(text) < 6200
+
+
 def test_each_model_researches_then_orchestrator_compiles_conflicts():
     calls: list[tuple[str, str]] = []
 

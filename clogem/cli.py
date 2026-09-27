@@ -960,24 +960,9 @@ async def async_main():
         return name[:1].upper() + name[1:]
 
     def _activity_note(stderr: str, code: int) -> str:
-        text = stderr or ""
-        low = text.lower()
-        if "unknown variant" in low and "max" in low:
-            return "could not refresh models"
-        if "full-auto" in low or "sandbox workspace-write" in low:
-            return "permission flag rejected"
-        if "grounding" in low:
-            return "search unavailable"
-        for raw in text.splitlines():
-            line = raw.strip()
-            if not line or line.startswith("{") or line.startswith("["):
-                continue
-            if line.lower().startswith(("stderr:", "warning:", "error ")):
-                continue
-            if len(line) > 64:
-                line = line[:61] + "..."
-            return line
-        return "did not finish" if code else ""
+        from clogem.ui import activity_note
+
+        return activity_note(stderr, code)
 
     def _activity_finish(label: str, *, ok: bool, note: str, elapsed: float) -> None:
         import sys as _sys
@@ -1145,7 +1130,8 @@ async def async_main():
                 # legitimately take longer than the default subprocess timeout.
                 # Codex build/generation turns can also exceed 60s for larger tasks.
                 if is_gemini_cli:
-                    kw["timeout"] = max(to, 120)
+                    floor = 300 if "research" in (status_msg or "").lower() else 120
+                    kw["timeout"] = max(to, floor)
                 elif is_codex_cli:
                     kw["timeout"] = max(to, 180)
                 else:
@@ -1162,7 +1148,7 @@ async def async_main():
                     f"subprocess timed out after {timeout_used}s "
                     f"(set CLOGEM_SUBPROCESS_TIMEOUT_SEC to adjust)"
                 )
-                _say(f"[clogem] ERROR: {msg}.")
+                logger.debug("%s", msg)
                 # Return a non-zero result instead of raising so callers can
                 # gracefully fallback (e.g., /research -> orchestrator).
                 return subprocess.CompletedProcess(
@@ -1170,6 +1156,14 @@ async def async_main():
                     124,
                     stdout="",
                     stderr=msg,
+                )
+            except OSError as exc:
+                logger.debug("command failed to start", exc_info=True)
+                return subprocess.CompletedProcess(
+                    cmd,
+                    1,
+                    stdout="",
+                    stderr=str(exc),
                 )
 
         if status_msg:
@@ -3673,29 +3667,34 @@ Return project edits as:
 
                 _sys.stdout.write(f"{_ACTIVITY_MUTED}\n  Research{_ACTIVITY_RESET}\n")
                 _sys.stdout.flush()
-                research_raw, research_err, research_rc, _reports = (
-                    await conduct_multi_model_research(
-                        question=research_task_body,
-                        sources=sources,
-                        providers=panel,
-                        orchestrator_provider=orch_provider,
-                        local_block=local_datetime_context_block(),
-                        run_provider=run_provider,
-                        run_gemini_grounded=run_gemini_grounded,
-                    )
-                )
-
-                if research_rc != 0:
-                    console.print()
-                    _say(
-                        f"[clogem] ERROR: orchestrator exited with code {research_rc} "
-                        "while compiling /research."
-                    )
-                    if (research_err or "").strip():
-                        console.print(
-                            Text((research_err or "").strip()[:800], style=LOG_ERR)
+                try:
+                    research_raw, research_err, research_rc, reports_text = (
+                        await conduct_multi_model_research(
+                            question=research_task_body,
+                            sources=sources,
+                            providers=panel,
+                            orchestrator_provider=orch_provider,
+                            local_block=local_datetime_context_block(),
+                            run_provider=run_provider,
+                            run_gemini_grounded=run_gemini_grounded,
                         )
+                    )
+                except Exception:
+                    logger.exception("/research failed")
                     console.print()
+                    console.print(Text("  · Research  could not finish", style=MUTED))
+                    console.print()
+                    _token_turn_footer()
+                    continue
+
+                if research_rc != 0 or not (research_raw or "").strip():
+                    console.print()
+                    console.print(Text("  · Compiling  could not finish", style=MUTED))
+                    if (reports_text or "").strip():
+                        section_rule("Reply (/research)")
+                        console.print()
+                        console.print(reports_text.strip())
+                        console.print()
                     _token_turn_footer()
                     continue
 

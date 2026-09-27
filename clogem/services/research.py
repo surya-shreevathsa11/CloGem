@@ -46,6 +46,8 @@ def format_research_reports(reports: Sequence[Tuple[str, str, str, int]]) -> str
         else:
             detail = (err or "").strip() or "no output"
             body = f"(this researcher failed, exit {rc})\n{detail}"
+        if len(body) > 6000:
+            body = body[:6000] + "\n...[truncated]"
         blocks.append(f"### {provider}\n{body}")
     return "\n\n".join(blocks)
 

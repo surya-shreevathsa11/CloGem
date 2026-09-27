@@ -5,6 +5,34 @@ from clogem.logging_utils import get_logger
 logger = get_logger(__name__)
 
 
+def activity_note(stderr: str, code: int) -> str:
+    """One short reason for a failed model step. Never a traceback or log dump."""
+    text = stderr or ""
+    low = text.lower()
+    if "unknown variant" in low and "max" in low:
+        return "could not refresh models"
+    if "timed out" in low or code == 124:
+        return "timed out"
+    if "argument list too long" in low or "too long" in low:
+        return "request was too large"
+    if "full-auto" in low or "sandbox workspace-write" in low:
+        return "permission flag rejected"
+    if "grounding" in low:
+        return "search unavailable"
+    if "traceback (most recent call last)" in low:
+        return "did not finish"
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("{") or line.startswith("["):
+            continue
+        if line.lower().startswith(("stderr:", "warning:", "error ", "[clogem]")):
+            continue
+        if len(line) > 64:
+            line = line[:61] + "..."
+        return line
+    return "did not finish" if code else ""
+
+
 # Boot palette (24-bit ANSI) — matches clogem rose theme, not plain white
 _BOOT_ROSE = "\033[38;2;190;85;85m"
 _BOOT_SOFT = "\033[38;2;255;175;175m"

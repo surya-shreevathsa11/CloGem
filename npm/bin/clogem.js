@@ -162,7 +162,31 @@ async function ensureApp() {
   fs.writeFileSync(versionFile, `${version}\n`);
 }
 
+async function updateClogem() {
+  const npm = process.platform === "win32" ? "npm.cmd" : "npm";
+  const result = await runQuiet(npm, ["update", "-g", "@shywolf/clogem"], "updating");
+  if (result.code !== 0) {
+    const tail = (result.log || "").trim().split("\n").slice(-8).join("\n");
+    if (tail) {
+      console.error(tail);
+    }
+    fail("Could not update. Try: npm install -g @shywolf/clogem");
+  }
+  fs.rmSync(versionFile, { force: true });
+  fs.rmSync(appDir, { recursive: true, force: true });
+  if (process.stdout.isTTY) {
+    process.stdout.write("\x1b[38;2;190;85;85m  updated\x1b[0m\n");
+  } else {
+    process.stdout.write("updated\n");
+  }
+  process.exit(0);
+}
+
 async function main() {
+  if (process.argv[2] === "update") {
+    await updateClogem();
+    return;
+  }
   await ensureApp();
   const args = process.argv.slice(2).filter((arg) => arg !== "--skip-setup");
   const marker = path.join(dataDir, "setup-done");
