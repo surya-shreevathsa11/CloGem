@@ -168,7 +168,7 @@ On **Windows**, you can use **WSL** (below) or native installs if `python3`, `pi
 This is the install for people who want to use Clogem, not edit it.
 
 ```bash
-npm install -g clogem
+npm install -g @shywolf/clogem
 clogem
 ```
 

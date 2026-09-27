@@ -8,7 +8,7 @@ All commands available in a `clogem` session, sorted alphabetically.
 
 | Command | What it does | How to enable |
 |---------|-------------|---------------|
-| `clogem` | Start the interactive REPL | `npm install -g clogem` or `pip install -e .` |
+| `clogem` | Start the interactive REPL | `npm install -g @shywolf/clogem` or `pip install -e .` |
 | `clogem setup` | Install Codex, Gemini, Claude Code, and Grok, then save sign-in settings | Built-in subcommand. `--yes` skips prompts for installs and non-secret settings |
 | `clogem --god-mode` | Start with all permissions pre-granted (no approval prompts) | Pass the flag, or set `CLOGEM_GOD_MODE=1`, or `god_mode = true` in `.clogem.toml` |
 | `clogem --no-stitch` | Disable the Google Stitch stage for UI-heavy tasks | Pass the flag, or set `CLOGEM_STITCH=0` |
