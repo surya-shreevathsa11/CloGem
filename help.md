@@ -11,7 +11,7 @@ Use these at the start of your message to control how that turn is handled:
 - `/debug <task>`: debugging emphasis
 - `/agent <task>`: autonomous multi-step implementation style
 - `/ask <question>`: answer directly (skip build loop)
-- `/research <query>`: research-style response (skip build loop)
+- `/research <query>`: each available model researches on its own; the orchestrator verifies conflicts and compiles one answer (skip build loop)
 
 ## Model commands
 

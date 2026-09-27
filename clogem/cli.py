@@ -109,6 +109,7 @@ async def async_main():
         local_datetime_context_block,
         needs_realtime_web_assist,
     )
+    from clogem.services.research import conduct_multi_model_research, research_providers
     from clogem.services.routing import parse_session_directive, resolve_turn_mode
     from clogem.visual_review import capture_frontend_screenshot
 
@@ -2146,6 +2147,32 @@ async def async_main():
             return await run_grok(prompt, status_msg, llm_timeout_sec=llm_timeout_sec, stream=stream)
         return "", f"Unsupported provider for role {role}: {provider}", 1
 
+    async def run_provider(
+        provider: str,
+        prompt: str,
+        status_msg: str,
+        *,
+        llm_timeout_sec: Optional[int] = None,
+        stream: bool = False,
+    ) -> Tuple[str, str, int]:
+        if provider == "codex":
+            return await run_codex(
+                prompt, status_msg, llm_timeout_sec=llm_timeout_sec, stream=stream
+            )
+        if provider == "gemini":
+            return await run_gemini(
+                prompt, status_msg, llm_timeout_sec=llm_timeout_sec, stream=stream
+            )
+        if provider == "claude":
+            return await run_claude(
+                prompt, status_msg, llm_timeout_sec=llm_timeout_sec, stream=stream
+            )
+        if provider == "grok":
+            return await run_grok(
+                prompt, status_msg, llm_timeout_sec=llm_timeout_sec, stream=stream
+            )
+        return "", f"Unsupported research provider: {provider}", 1
+
     def extract_code(text):
         return artifact_helpers.extract_code(text)
 
@@ -2153,9 +2180,6 @@ async def async_main():
     ROUTER_DIRECTIVE_HINTS = prompt_defs.ROUTER_DIRECTIVE_HINTS
     CODEX_MODE_HINTS = prompt_defs.CODEX_MODE_HINTS
     ASK_MODE_PROMPT = prompt_defs.ASK_MODE_PROMPT
-    RESEARCH_MODE_PROMPT_WITH_SOURCES = prompt_defs.RESEARCH_MODE_PROMPT_WITH_SOURCES
-    RESEARCH_WEB_PROMPT = prompt_defs.RESEARCH_WEB_PROMPT
-    RESEARCH_ORCHESTRATOR_FALLBACK = prompt_defs.RESEARCH_ORCHESTRATOR_FALLBACK
     ROUTER_SECONDARY_INTENT_PROMPT = prompt_defs.ROUTER_SECONDARY_INTENT_PROMPT
     GEMINI_REVIEW_PROMPT = prompt_defs.GEMINI_REVIEW_PROMPT
     ARCHITECT_SUBTASK_PROMPT = prompt_defs.ARCHITECT_SUBTASK_PROMPT
@@ -2397,7 +2421,7 @@ Return project edits as:
             "- `/agent`: autonomous multi-step coding within scope.\n"
             "- `/build`: force the full build pipeline this turn.\n"
             "- `/ask`: chat-only; no build pipeline this turn.\n"
-            "- `/research`: research-style answer (no build loop); web-grounded when no `@` files, file-grounded when you attach `@` sources.\n"
+            "- `/research`: each available model researches on its own (no build loop); the orchestrator then verifies conflicts and compiles one answer. `@` files stay source-only.\n"
             "- `/pdf`: generate a PDF from provided text (plain text layout; requires `reportlab`).\n"
             "- `/repo/info`: show repo info (git status/branch/last commit).\n"
             "- `/test`: run detected tests (best-effort).\n"
@@ -3584,69 +3608,40 @@ Return project edits as:
                 _say("[clogem] Turn finished. What would you like to do next?")
                 continue
 
-            # ---------- /research: academic research (skip router + build pipeline) ----------
+            # ---------- /research: each model researches, then the orchestrator compiles ----------
             if session_directive == "research":
                 research_task_body = (task_clean or "(no question)").strip()
                 sources = (attach_block or "").strip()
-
+                orch_provider = role_provider_map.get("orchestrator", "codex")
+                panel = research_providers(orchestrator_provider=orch_provider)
                 if sources:
                     trace_doing(
-                        "/research with @ sources — answering from inlined files only "
-                        "(cite sources; no web)."
+                        "/research with @ sources — each model answers from the attached "
+                        "files only, then the orchestrator compiles one reply."
                     )
-                    research_prompt = (
-                        RESEARCH_MODE_PROMPT_WITH_SOURCES.replace("__SOURCES__", sources)
-                        .replace("__TASK__", research_task_body)
-                    )
-                    research_raw, research_err, research_rc = await run_role(
-                        "orchestrator",
-                        research_prompt,
-                        "Orchestrator: /research (from @ sources)...",
-                    )
-                    err_label = "LLM"
                 else:
                     trace_doing(
-                        "/research without @ — using Gemini + Google Search grounding."
+                        "/research — each available model researches on its own "
+                        f"({', '.join(panel)}); the orchestrator then verifies conflicts "
+                        "and compiles one reply."
                     )
-                    local_block = local_datetime_context_block()
-                    research_prompt = (
-                        RESEARCH_WEB_PROMPT.replace("__LOCAL__", local_block)
-                        .replace("__TASK__", research_task_body)
+                research_raw, research_err, research_rc, _reports = (
+                    await conduct_multi_model_research(
+                        question=research_task_body,
+                        sources=sources,
+                        providers=panel,
+                        orchestrator_provider=orch_provider,
+                        local_block=local_datetime_context_block(),
+                        run_provider=run_provider,
+                        run_gemini_grounded=run_gemini_grounded,
                     )
-                    research_raw, research_err, research_rc = await run_gemini_grounded(
-                        research_prompt,
-                        "Gemini: /research (web-grounded)...",
-                    )
-                    err_label = "Gemini (grounded)"
-                    if research_rc != 0:
-                        trace_done(
-                            "Grounded research unavailable; trying Gemini without grounding."
-                        )
-                        research_raw, research_err, research_rc = await run_gemini(
-                            research_prompt
-                            + "\n\n(Note: Google Search grounding was unavailable. "
-                            "Answer conservatively; do not invent citations.)",
-                            "Gemini: /research (best-effort)...",
-                        )
-                        err_label = "Gemini"
-                    if research_rc != 0:
-                        trace_done(
-                            "Gemini unavailable; using orchestrator with conservative instructions."
-                        )
-                        fb = RESEARCH_ORCHESTRATOR_FALLBACK.replace(
-                            "__TASK__", research_task_body
-                        )
-                        research_raw, research_err, research_rc = await run_role(
-                            "orchestrator",
-                            fb,
-                            "Orchestrator: /research (best-effort)...",
-                        )
-                        err_label = "LLM"
+                )
 
                 if research_rc != 0:
                     console.print()
                     _say(
-                        f"[clogem] ERROR: {err_label} exited with code {research_rc} for /research."
+                        f"[clogem] ERROR: orchestrator exited with code {research_rc} "
+                        "while compiling /research."
                     )
                     if (research_err or "").strip():
                         console.print(
@@ -3656,10 +3651,7 @@ Return project edits as:
                     _token_turn_footer()
                     continue
 
-                if sources:
-                    trace_done("Direct /research reply ready (from @ sources).")
-                else:
-                    trace_done("Direct /research reply ready (web-grounded or best-effort).")
+                trace_done("Compiled /research reply ready.")
                 live_reasoning_banner_chat(task or "/research")
                 section_rule("Reply (/research)")
                 console.print()

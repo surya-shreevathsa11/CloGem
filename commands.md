@@ -35,7 +35,7 @@ Prefix your message with one of these to override how that turn is routed. They 
 | `/build <task>` | Force the full build pipeline, skip BUILD/CHAT router | Always available |
 | `/debug <task>` | Debugging and root-cause emphasis for this turn | Always available |
 | `/plan <task>` | Planning and milestones emphasis; write or update `.clogem/plan.md` | Always available; `run_role` must be wired (it is in the REPL) |
-| `/research <query>` | Research-style response; uses Gemini + Google Search when available | Always available |
+| `/research <query>` | Each available model researches independently; the orchestrator verifies conflicts and compiles one answer. `@` files stay source-only | Always available |
 | `/resume` | Show a numbered list of recent sessions; pick one to load its context (tasks done, files written, memory snapshot) into the current session | Always available |
 
 ---

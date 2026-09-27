@@ -801,7 +801,7 @@ Prefix the **first line** of your message with one of these. They stack with `@`
 | `/debug …` | Debugging emphasis (root cause, repro, targeted fixes).                                     |
 | `/agent …` | Autonomous, multi-step coding style within the scoped task.                                 |
 | `/ask …`   | Pure Q&A (skips the router and the Codex+Gemini build loop for this turn).                  |
-| `/research …` | Research-style answer (skips the build loop). Without `@` files, uses **Gemini + Google Search grounding** when the SDK is available; with `@` paths, answers only from inlined sources (no web). |
+| `/research …` | Each available model researches on its own (Codex, Gemini, Grok when installed, Claude when `ANTHROPIC_API_KEY` is set), including the orchestrator's model. The orchestrator then checks conflicts and writes one answer. Without `@` files, Gemini may use Google Search grounding; other models are not told they have that search. With `@` paths, every model stays inside those sources. |
 
 
 ### @ file and folder mentions

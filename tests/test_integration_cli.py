@@ -108,6 +108,9 @@ def _run_cli_run_subcommand(
     gemini_exec = "gemini.cmd" if os.name == "nt" else "gemini"
     env["CLOGEM_CODEX_CMD"] = str(bin_dir / codex_exec)
     env["CLOGEM_GEMINI_CMD"] = str(bin_dir / gemini_exec)
+    env["CLOGEM_GROK_CMD"] = str(bin_dir / "grok-not-installed")
+    env.pop("XAI_API_KEY", None)
+    env.pop("ANTHROPIC_API_KEY", None)
     env["CLOGEM_AUTO_PERMISSIONS"] = "yes"
     env["CLOGEM_STITCH"] = "0"
     env["CLOGEM_AUTO_REPO_CONTEXT"] = "0"
@@ -148,6 +151,9 @@ def _run_cli(
     gemini_exec = "gemini.cmd" if os.name == "nt" else "gemini"
     env["CLOGEM_CODEX_CMD"] = str(bin_dir / codex_exec)
     env["CLOGEM_GEMINI_CMD"] = str(bin_dir / gemini_exec)
+    env["CLOGEM_GROK_CMD"] = str(bin_dir / "grok-not-installed")
+    env.pop("XAI_API_KEY", None)
+    env.pop("ANTHROPIC_API_KEY", None)
     env["CLOGEM_AUTO_PERMISSIONS"] = "yes"
     env["CLOGEM_ALLOW_LOCAL_COMMANDS"] = "yes"
     env["CLOGEM_STITCH"] = "0"
@@ -223,12 +229,17 @@ def test_cli_pdf_intent_does_not_trigger_build_pipeline(tmp_path: Path):
 
 
 def test_cli_research_without_attachments_skips_build_pipeline(tmp_path: Path):
-    """Regression: /research without @ still runs (web-grounded / best-effort) and skips build."""
+    """Regression: /research asks each model, then compiles, and still skips the build loop."""
     repo_root = Path(__file__).resolve().parents[1]
     bin_dir = tmp_path / "bin"
     _write_fake_clis(bin_dir)
 
-    proc = _run_cli(repo_root, "/research what is CRISPR?\n/exit\n", bin_dir)
+    proc = _run_cli(
+        repo_root,
+        "/research what is CRISPR?\n/exit\n",
+        bin_dir,
+        extra_env={"CLOGEM_GEMINI_BACKEND": "cli"},
+    )
     out = (proc.stdout or "") + "\n" + (proc.stderr or "")
     assert proc.returncode == 0
     assert "Reply (/research)" in out
