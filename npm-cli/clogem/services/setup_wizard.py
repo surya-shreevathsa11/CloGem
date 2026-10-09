@@ -5,6 +5,7 @@ from __future__ import annotations
 import shlex
 import shutil
 import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Mapping, Optional, Sequence
@@ -24,6 +25,9 @@ SUDO_HINTS = {
     "gemini": "sudo npm install -g @google/gemini-cli",
     "claude": "sudo npm install -g @anthropic-ai/claude-code",
 }
+
+# Tools the Clogem install itself needs, besides the companion CLIs.
+HOST_TOOLS = ("git", "curl", "node", "npm")
 
 DEFAULT_ENV = {
     "CLOGEM_GEMINI_BACKEND": "sdk",
@@ -52,6 +56,76 @@ class CmdResult:
 
 def missing_companions(which: Which) -> list[str]:
     return [name for name, _cmd in COMPANIONS if not which(name)]
+
+
+def missing_host_tools(which: Which) -> list[str]:
+    return [name for name in HOST_TOOLS if not which(name)]
+
+
+def brew_executable(which: Which) -> Optional[str]:
+    for candidate in ("/opt/homebrew/bin/brew", "/usr/local/bin/brew"):
+        if Path(candidate).is_file():
+            return candidate
+    return which("brew")
+
+
+def linux_host_packages(missing: Sequence[str]) -> list[str]:
+    packages: list[str] = []
+    if "git" in missing:
+        packages.append("git")
+    if "curl" in missing:
+        packages.extend(["curl", "ca-certificates"])
+    if "node" in missing or "npm" in missing:
+        packages.extend(["nodejs", "npm"])
+    return packages
+
+
+def host_install_command(platform: str, missing: Sequence[str], which: Which) -> Optional[tuple[str, ...]]:
+    """OS package install for git, curl, and Node. None when nothing is missing or no manager exists."""
+    if not missing:
+        return None
+    if platform == "darwin":
+        brew = brew_executable(which)
+        if not brew:
+            return None
+        packages: list[str] = []
+        if "git" in missing:
+            packages.append("git")
+        if "curl" in missing:
+            packages.append("curl")
+        if "node" in missing or "npm" in missing:
+            packages.append("node")
+        if not packages:
+            return None
+        return (brew, "install", *packages)
+    if platform.startswith("win"):
+        return None
+    packages = linux_host_packages(missing)
+    if not packages:
+        return None
+    if which("apt-get"):
+        return ("sudo", "apt-get", "install", "-y", *packages)
+    if which("dnf"):
+        return ("sudo", "dnf", "install", "-y", *packages)
+    if which("pacman"):
+        return ("sudo", "pacman", "-S", "--noconfirm", *packages)
+    return None
+
+
+def host_install_hint(platform: str, missing: Sequence[str]) -> str:
+    if platform == "darwin":
+        names: list[str] = []
+        if "git" in missing:
+            names.append("git")
+        if "curl" in missing:
+            names.append("curl")
+        if "node" in missing or "npm" in missing:
+            names.append("node")
+        return "On a Mac, install them with Homebrew: brew install " + " ".join(names)
+    if platform.startswith("win"):
+        return "Install Git, curl, and Node.js 18 or newer, then run clogem setup again."
+    packages = " ".join(linux_host_packages(missing))
+    return f"Install them with the system package manager, for example: sudo apt-get install -y {packages}"
 
 
 def shell_rc_path(home: Path, environ: Mapping[str, str]) -> Path:
@@ -166,6 +240,7 @@ def run_setup(
     input_fn: Optional[InputFn] = None,
     say: Optional[Say] = None,
     is_tty: Optional[bool] = None,
+    platform: Optional[str] = None,
 ) -> int:
     """Install missing CLIs and write shell settings. Returns a process exit code."""
     home = home or Path.home()
@@ -180,6 +255,23 @@ def run_setup(
     speak("Clogem setup")
     speak("This installs Codex, Gemini, Claude Code, and Grok when they are missing,")
     speak("then saves the settings Clogem needs on a personal machine.")
+
+    host_platform = platform or sys.platform
+    missing_host = missing_host_tools(which_fn)
+    if missing_host:
+        host_cmd = host_install_command(host_platform, missing_host, which_fn)
+        label = ", ".join(missing_host)
+        if host_cmd and _yes(f"Install {label}?", assume_yes=assume_yes, is_tty=tty, input_fn=ask):
+            result = run(host_cmd)
+            if result.code != 0:
+                speak(f"Could not install {label}.")
+                speak(host_install_hint(host_platform, missing_host))
+        elif host_cmd:
+            speak(f"Skipped {label}.")
+            speak(host_install_hint(host_platform, missing_host))
+        else:
+            speak(f"Missing {label}.")
+            speak(host_install_hint(host_platform, missing_host))
 
     for name, cmd in COMPANIONS:
         if which_fn(name):

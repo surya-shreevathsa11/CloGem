@@ -174,6 +174,10 @@ clogem
 
 You need **Node.js 18+** and **Python 3.10+**. The `clogem` command creates a private virtualenv, installs the app, and on the first launch runs `clogem setup`.
 
+If Python is missing or has no `venv` module, clogem installs it for the OS it is running on. On a Mac that is `brew install python@3.12` (Homebrew paths under `/opt/homebrew` and `/usr/local` are checked first). On Linux it uses `apt`, `dnf`, or `pacman`. A Mac never gets the Debian `apt install python3-venv` text that Python itself prints when `venv` is missing.
+
+Git, curl, and Node.js are installed the same way when they are missing: Homebrew on a Mac, and `apt`, `dnf`, or `pacman` on Linux. Machines that already have them are left alone. Codex, Gemini, Claude Code, and Grok then install with the same commands on both systems.
+
 Setup asks before it installs anything else:
 
 - Codex (`npm install -g @openai/codex`), then `codex login`

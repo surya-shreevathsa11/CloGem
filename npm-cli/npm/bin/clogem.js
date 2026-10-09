@@ -17,13 +17,6 @@ function fail(message) {
   process.exit(1);
 }
 
-function pythonLauncher() {
-  if (process.env.CLOGEM_PYTHON) {
-    return process.env.CLOGEM_PYTHON;
-  }
-  return process.platform === "win32" ? "python" : "python3";
-}
-
 function venvPython() {
   return process.platform === "win32"
     ? path.join(venvDir, "Scripts", "python.exe")
@@ -97,12 +90,268 @@ function runQuiet(cmd, args, label) {
   });
 }
 
-function pythonIsNewEnough(python) {
-  const check = spawnSync(python, [
-    "-c",
-    "import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)",
-  ]);
-  return check.status === 0;
+const PYTHON_READY =
+  "import ensurepip, sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)";
+
+function pythonCandidates(platform, env = {}) {
+  if (env.CLOGEM_PYTHON) {
+    return [env.CLOGEM_PYTHON];
+  }
+  const names =
+    platform === "win32"
+      ? ["python", "py", "python3"]
+      : ["python3", "python3.13", "python3.12", "python3.11", "python3.10"];
+  if (platform === "darwin") {
+    names.push(
+      "/opt/homebrew/bin/python3.13",
+      "/opt/homebrew/bin/python3.12",
+      "/opt/homebrew/opt/python@3.13/bin/python3.13",
+      "/opt/homebrew/opt/python@3.12/bin/python3.12",
+      "/usr/local/bin/python3.13",
+      "/usr/local/bin/python3.12",
+      "/usr/local/opt/python@3.13/bin/python3.13",
+      "/usr/local/opt/python@3.12/bin/python3.12",
+    );
+  }
+  return names;
+}
+
+function findReadyPython(candidates, spawnImpl = spawnSync) {
+  for (const candidate of candidates) {
+    const check = spawnImpl(candidate, ["-c", PYTHON_READY], { stdio: "ignore" });
+    if (check && check.status === 0) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
+function commandOnPath(name) {
+  if (name.startsWith("/") || /^[A-Za-z]:[\\/]/.test(name)) {
+    return fs.existsSync(name);
+  }
+  const finder = process.platform === "win32" ? "where" : "which";
+  return spawnSync(finder, [name], { stdio: "ignore" }).status === 0;
+}
+
+function pythonInstallSpec(platform, commandExists) {
+  if (platform === "darwin") {
+    const brew =
+      ["/opt/homebrew/bin/brew", "/usr/local/bin/brew"].find((item) => commandExists(item)) ||
+      (commandExists("brew") ? "brew" : null);
+    if (!brew) {
+      return null;
+    }
+    return {
+      cmd: [brew, "install", "python@3.12"],
+      label: "Installing Python with Homebrew",
+      needsTty: false,
+    };
+  }
+  if (platform === "win32") {
+    return null;
+  }
+  if (commandExists("apt-get")) {
+    return {
+      cmd: ["sudo", "apt-get", "install", "-y", "python3", "python3-venv", "python3-pip"],
+      label: "Installing Python with apt",
+      needsTty: true,
+    };
+  }
+  if (commandExists("dnf")) {
+    return {
+      cmd: ["sudo", "dnf", "install", "-y", "python3"],
+      label: "Installing Python with dnf",
+      needsTty: true,
+    };
+  }
+  if (commandExists("pacman")) {
+    return {
+      cmd: ["sudo", "pacman", "-S", "--noconfirm", "python"],
+      label: "Installing Python with pacman",
+      needsTty: true,
+    };
+  }
+  return null;
+}
+
+function pythonSetupMessage(platform, hasBrew) {
+  if (platform === "darwin") {
+    const lines = [
+      "Python 3.10 or newer, with the venv module, is required.",
+      "A Mac does not use apt. Install Python with Homebrew:",
+    ];
+    if (!hasBrew) {
+      lines.push(
+        '  /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"',
+      );
+    }
+    lines.push("  brew install python@3.12", "Or download the macOS installer: https://www.python.org/downloads/macos/", "Then run clogem again.");
+    return lines.join("\n");
+  }
+  if (platform === "win32") {
+    return [
+      "Python 3.10 or newer is required.",
+      "Install it from https://www.python.org/downloads/ and turn on Add python.exe to PATH.",
+      "Then run clogem again.",
+    ].join("\n");
+  }
+  return [
+    "Python 3.10 or newer, with the venv module, is required.",
+    "Debian or Ubuntu: sudo apt-get install -y python3 python3-venv python3-pip",
+    "Fedora: sudo dnf install -y python3",
+    "Arch: sudo pacman -S python",
+    "Then run clogem again.",
+  ].join("\n");
+}
+
+function scrubInstallLog(platform, log) {
+  const text = String(log || "").trim();
+  if (!text) {
+    return "";
+  }
+  if (platform !== "linux" && /debian|ubuntu|apt install|apt-get/i.test(text)) {
+    return "";
+  }
+  return text;
+}
+
+function venvFailureNeedsPython(log) {
+  return /ensurepip|python3-venv|no module named ['"]venv['"]|debian\/ubuntu/i.test(String(log || ""));
+}
+
+const HOST_TOOLS = ["git", "curl", "node", "npm"];
+
+function missingHostTools(commandExists) {
+  return HOST_TOOLS.filter((name) => !commandExists(name));
+}
+
+function hostToolInstallSpec(platform, missing, commandExists) {
+  if (!missing.length) {
+    return null;
+  }
+  if (platform === "darwin") {
+    const brew =
+      ["/opt/homebrew/bin/brew", "/usr/local/bin/brew"].find((item) => commandExists(item)) ||
+      (commandExists("brew") ? "brew" : null);
+    if (!brew) {
+      return null;
+    }
+    const packages = [];
+    if (missing.includes("git")) packages.push("git");
+    if (missing.includes("curl")) packages.push("curl");
+    if (missing.includes("node") || missing.includes("npm")) packages.push("node");
+    if (!packages.length) {
+      return null;
+    }
+    return {
+      cmd: [brew, "install", ...packages],
+      label: "Installing git, curl, and Node with Homebrew",
+      needsTty: false,
+    };
+  }
+  if (platform === "win32") {
+    return null;
+  }
+  const packages = [];
+  if (missing.includes("git")) packages.push("git");
+  if (missing.includes("curl")) packages.push("curl", "ca-certificates");
+  if (missing.includes("node") || missing.includes("npm")) packages.push("nodejs", "npm");
+  if (!packages.length) {
+    return null;
+  }
+  if (commandExists("apt-get")) {
+    return {
+      cmd: ["sudo", "apt-get", "install", "-y", ...packages],
+      label: "Installing git, curl, and Node with apt",
+      needsTty: true,
+    };
+  }
+  if (commandExists("dnf")) {
+    return {
+      cmd: ["sudo", "dnf", "install", "-y", ...packages],
+      label: "Installing git, curl, and Node with dnf",
+      needsTty: true,
+    };
+  }
+  if (commandExists("pacman")) {
+    return {
+      cmd: ["sudo", "pacman", "-S", "--noconfirm", ...packages],
+      label: "Installing git, curl, and Node with pacman",
+      needsTty: true,
+    };
+  }
+  return null;
+}
+
+function hostToolMessage(platform, missing) {
+  if (platform === "darwin") {
+    const names = [];
+    if (missing.includes("git")) names.push("git");
+    if (missing.includes("curl")) names.push("curl");
+    if (missing.includes("node") || missing.includes("npm")) names.push("node");
+    return `On a Mac, install them with Homebrew:\n  brew install ${names.join(" ")}`;
+  }
+  if (platform === "win32") {
+    return "Install Git, curl, and Node.js 18 or newer, then run clogem again.";
+  }
+  const packages = [];
+  if (missing.includes("git")) packages.push("git");
+  if (missing.includes("curl")) packages.push("curl", "ca-certificates");
+  if (missing.includes("node") || missing.includes("npm")) packages.push("nodejs", "npm");
+  return `Install them with the system package manager, for example:\n  sudo apt-get install -y ${packages.join(" ")}`;
+}
+
+function ensureHostTools() {
+  const missing = missingHostTools(commandOnPath);
+  if (!missing.length) {
+    return;
+  }
+  const spec = hostToolInstallSpec(process.platform, missing, commandOnPath);
+  if (!spec || (spec.needsTty && !process.stdin.isTTY)) {
+    console.error(hostToolMessage(process.platform, missing));
+    return;
+  }
+  console.error(spec.label);
+  const result = spawnSync(spec.cmd[0], spec.cmd.slice(1), { stdio: "inherit" });
+  if (result.error || result.status !== 0) {
+    console.error(hostToolMessage(process.platform, missing));
+  }
+}
+
+let triedHostPythonInstall = false;
+
+function tryHostPythonInstall() {
+  if (triedHostPythonInstall || process.env.CLOGEM_PYTHON) {
+    return false;
+  }
+  triedHostPythonInstall = true;
+  const spec = pythonInstallSpec(process.platform, commandOnPath);
+  if (!spec || (spec.needsTty && !process.stdin.isTTY)) {
+    return false;
+  }
+  console.error(spec.label);
+  const result = spawnSync(spec.cmd[0], spec.cmd.slice(1), { stdio: "inherit" });
+  return !result.error && result.status === 0;
+}
+
+function ensurePython() {
+  const platform = process.platform;
+  const ready = () => findReadyPython(pythonCandidates(platform, process.env));
+  let python = ready();
+  if (python) {
+    return python;
+  }
+  if (process.env.CLOGEM_PYTHON) {
+    fail(`CLOGEM_PYTHON is not usable (need Python 3.10+ with venv): ${process.env.CLOGEM_PYTHON}`);
+  }
+  tryHostPythonInstall();
+  python = ready();
+  if (python) {
+    return python;
+  }
+  const hasBrew = platform === "darwin" && pythonInstallSpec(platform, commandOnPath) != null;
+  fail(pythonSetupMessage(platform, hasBrew));
 }
 
 function copyTree(from, to) {
@@ -125,10 +374,8 @@ async function ensureApp() {
   if (installed === version && fs.existsSync(venvClogem())) {
     return;
   }
-  const python = pythonLauncher();
-  if (!pythonIsNewEnough(python)) {
-    fail("Python 3.10+ is required. Install it, then run clogem again.");
-  }
+  const python = ensurePython();
+  ensureHostTools();
   fs.mkdirSync(dataDir, { recursive: true });
   fs.rmSync(appDir, { recursive: true, force: true });
   fs.mkdirSync(appDir, { recursive: true });
@@ -136,10 +383,25 @@ async function ensureApp() {
     copyTree(path.join(pkgRoot, name), path.join(appDir, name));
   }
   if (!fs.existsSync(venvPython())) {
-    const created = await runQuiet(python, ["-m", "venv", venvDir], "preparing");
+    let created = await runQuiet(python, ["-m", "venv", venvDir], "preparing");
+    if (created.code !== 0 && venvFailureNeedsPython(created.log)) {
+      fs.rmSync(venvDir, { recursive: true, force: true });
+      if (tryHostPythonInstall()) {
+        const repaired = findReadyPython(pythonCandidates(process.platform, process.env));
+        if (repaired) {
+          created = await runQuiet(repaired, ["-m", "venv", venvDir], "preparing");
+        }
+      }
+    }
     if (created.code !== 0) {
-      if (created.log.trim()) {
-        console.error(created.log.trim());
+      const needsPython = venvFailureNeedsPython(created.log);
+      const log = scrubInstallLog(process.platform, created.log);
+      if (log) {
+        console.error(log);
+      }
+      if (needsPython) {
+        const hasBrew = process.platform === "darwin" && pythonInstallSpec(process.platform, commandOnPath) != null;
+        console.error(pythonSetupMessage(process.platform, hasBrew));
       }
       fail("Could not create a virtualenv.");
     }
@@ -201,4 +463,19 @@ async function main() {
   process.exit(run(venvClogem(), args));
 }
 
-main();
+if (require.main === module) {
+  main();
+}
+
+module.exports = {
+  PYTHON_READY,
+  findReadyPython,
+  pythonCandidates,
+  pythonInstallSpec,
+  pythonSetupMessage,
+  scrubInstallLog,
+  venvFailureNeedsPython,
+  missingHostTools,
+  hostToolInstallSpec,
+  hostToolMessage,
+};

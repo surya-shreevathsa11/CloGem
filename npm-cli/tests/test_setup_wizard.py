@@ -5,12 +5,67 @@ from pathlib import Path
 from clogem.services.setup_wizard import (
     CmdResult,
     apply_saved_env,
+    host_install_command,
+    host_install_hint,
     missing_companions,
     render_shell_block,
     run_key,
     run_setup,
     upsert_shell_block,
 )
+
+
+def test_host_tools_use_homebrew_on_mac_and_apt_on_linux():
+    mac = host_install_command(
+        "darwin",
+        ["git", "curl", "node"],
+        lambda name: "/opt/homebrew/bin/brew" if name == "brew" else None,
+    )
+    assert mac == ("/opt/homebrew/bin/brew", "install", "git", "curl", "node")
+    assert "apt" not in host_install_hint("darwin", ["git", "node"])
+
+    linux = host_install_command(
+        "linux",
+        ["git", "curl", "npm"],
+        lambda name: "/usr/bin/apt-get" if name == "apt-get" else None,
+    )
+    assert linux == (
+        "sudo",
+        "apt-get",
+        "install",
+        "-y",
+        "git",
+        "curl",
+        "ca-certificates",
+        "nodejs",
+        "npm",
+    )
+    assert host_install_command("linux", [], lambda _name: "/usr/bin/apt-get") is None
+
+
+def test_setup_installs_missing_host_tools_before_companions(tmp_path: Path):
+    calls: list[tuple[str, ...]] = []
+
+    def which(name: str):
+        if name == "apt-get":
+            return "/usr/bin/apt-get"
+        if name in {"git", "curl", "node", "npm"}:
+            return None
+        return "/bin/" + name
+
+    home = tmp_path / "home"
+    home.mkdir()
+    code = run_setup(
+        assume_yes=True,
+        home=home,
+        environ={"SHELL": "/bin/zsh"},
+        which=which,
+        runner=lambda cmd: calls.append(tuple(cmd)) or CmdResult(0),
+        is_tty=False,
+        platform="linux",
+    )
+    assert code == 0
+    assert calls == [("sudo", "apt-get", "install", "-y", "git", "curl", "ca-certificates", "nodejs", "npm")]
 
 
 def test_missing_companions_reports_only_absent_tools():
