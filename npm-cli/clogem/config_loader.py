@@ -13,7 +13,6 @@ _TOML_FIELD_ALIASES: Dict[str, str] = {
     "codex_backend": "codex_backend",
     "gemini_backend": "gemini_backend",
     "subprocess_timeout_sec": "subprocess_timeout_sec",
-    "router_timeout_sec": "router_timeout_sec",
     "build_timeout_sec": "build_timeout_sec",
     "pdf_timeout_sec": "pdf_timeout_sec",
     "validation_timeout_sec": "validation_timeout_sec",
@@ -119,12 +118,10 @@ def apply_profile_preset(settings: Settings) -> Settings:
     if p == "fast":
         d["validation_max_attempts"] = min(d.get("validation_max_attempts", 2), 1)
         d["vector_rag"] = False
-        d["router_timeout_sec"] = min(d.get("router_timeout_sec", base_to), 45)
         d["build_timeout_sec"] = min(d.get("build_timeout_sec", base_to), 90)
     elif p == "thorough":
         d["validation_max_attempts"] = max(d.get("validation_max_attempts", 2), 3)
         d["validation_docker"] = True
-        d["router_timeout_sec"] = max(d.get("router_timeout_sec", base_to), 90)
         d["build_timeout_sec"] = max(d.get("build_timeout_sec", base_to), 300)
         d["pdf_timeout_sec"] = max(d.get("pdf_timeout_sec", 180), 300)
         d["validation_timeout_sec"] = max(d.get("validation_timeout_sec", base_to), 600)

@@ -14,12 +14,12 @@ from clogem.symbols import TagMatch, SymbolIndex
 def test_extract_python_imported_symbols_from_importfrom():
     src = """
 from clogem.symbols import SymbolIndex
-from clogem.task_intent import detect_prerequisite_first_task as d
+from clogem.task_intent import detect_pdf_generation_task as d
 """
     out = extract_python_imported_symbols(src)
     names = {o.symbol for o in out}
     assert "SymbolIndex" in names
-    assert "detect_prerequisite_first_task" in names
+    assert "detect_pdf_generation_task" in names
 
 
 def test_extract_js_imported_symbols_from_named_imports_aliases():

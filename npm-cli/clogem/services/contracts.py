@@ -12,47 +12,6 @@ TextFactory = Callable[[str], Any]
 
 
 @dataclass(frozen=True)
-class TurnModeRequest:
-    session_directive: Optional[str]
-    task_clean: str
-    mem_block: str
-    router_hint: str
-
-
-@dataclass(frozen=True)
-class TurnModeDeps:
-    build_router_prompt: Callable[[str, str, str], str]
-    run_codex: Callable[[str, str], Awaitable[Tuple[str, str, int]]]
-    runtime_stitch_capabilities_block: Callable[[], str]
-    runtime_clogem_commands_capabilities_block: Callable[[], str]
-    detect_stitch_frontend_heavy_task: Callable[[str], bool]
-    detect_prerequisite_first_task: Callable[[str], bool]
-    build_prerequisite_first_prompt: Callable[[str, str], str]
-    secondary_intent_classifier: Optional[
-        Callable[[str, str], Awaitable[Optional[str]]]
-    ] = None
-
-
-@dataclass(frozen=True)
-class TurnModeUI:
-    trace_doing: Callable[[str], None]
-    trace_done: Callable[[str], None]
-    say: Callable[[str], None]
-    console: ConsoleLike
-    text_factory: TextFactory
-    log_err_style: str
-    muted_style: str
-    token_turn_footer: Callable[[], None]
-
-
-@dataclass(frozen=True)
-class TurnModeResult:
-    stop_turn: bool
-    mode: Optional[str]
-    chat_reply: Optional[str]
-
-
-@dataclass(frozen=True)
 class StitchStageRequest:
     task_clean: str
     task_raw: str

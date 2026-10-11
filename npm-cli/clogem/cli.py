@@ -74,7 +74,6 @@ async def async_main():
     from clogem.session_journal import SessionJournal
     from clogem.stitch import detect_stitch_frontend_heavy_task
     from clogem.stitch.adapters import looks_like_ui_content
-    from clogem.task_intent import build_prerequisite_first_prompt, detect_prerequisite_first_task
     from clogem.services.pdf_pipeline import PdfPipelineDeps, run_pdf_generation_pipeline, wants_pdf_handling
     from clogem.write_safety import apply_unified_diff_safely, plan_safe_writes
     from clogem.command_policy import ALLOWED_EXECUTABLES, validate_local_command_args
@@ -108,9 +107,6 @@ async def async_main():
         StitchStageDeps,
         StitchStageRequest,
         StitchStageUI,
-        TurnModeDeps,
-        TurnModeRequest,
-        TurnModeUI,
     )
     from clogem.services.pipeline import build_context_blocks, maybe_run_stitch_stage
     from clogem.services.realtime_intent import (
@@ -119,7 +115,7 @@ async def async_main():
         needs_realtime_web_assist,
     )
     from clogem.services.research import conduct_multi_model_research, research_providers
-    from clogem.services.routing import parse_session_directive, resolve_turn_mode
+    from clogem.services.routing import parse_session_directive
     from clogem.visual_review import capture_frontend_screenshot
 
     _ap = argparse.ArgumentParser(
@@ -2218,47 +2214,16 @@ async def async_main():
     def extract_code(text):
         return artifact_helpers.extract_code(text)
 
-    ROUTER_TEMPLATE = prompt_defs.ROUTER_TEMPLATE
-    ROUTER_DIRECTIVE_HINTS = prompt_defs.ROUTER_DIRECTIVE_HINTS
     CODEX_MODE_HINTS = prompt_defs.CODEX_MODE_HINTS
     ASK_MODE_PROMPT = prompt_defs.ASK_MODE_PROMPT
-    ROUTER_SECONDARY_INTENT_PROMPT = prompt_defs.ROUTER_SECONDARY_INTENT_PROMPT
     GEMINI_REVIEW_PROMPT = prompt_defs.GEMINI_REVIEW_PROMPT
     ARCHITECT_SUBTASK_PROMPT = prompt_defs.ARCHITECT_SUBTASK_PROMPT
     INTEGRATION_REVIEW_PROMPT = prompt_defs.INTEGRATION_REVIEW_PROMPT
 
     _PERSIST_LINE = re.compile(
-        r"^PERSIST\s+(note|stack|constraints|decision)\s*:\s*(.+?)\s*$",
+        r"^PERSIST\s+(note|stack|constraints|decision|preference)\s*:\s*(.+?)\s*$",
         re.I,
     )
-
-    def build_router_prompt(
-        task: str, mem_block: str, router_hint: str = ""
-    ) -> str:
-        return prompt_defs.build_router_prompt(task, mem_block, router_hint)
-
-    async def classify_intent_secondary(task_text: str, _mem_block: str) -> Optional[str]:
-        enabled = settings.secondary_intent_llm
-        if not enabled:
-            return None
-        model = settings.router_classifier_model
-        prompt = ROUTER_SECONDARY_INTENT_PROMPT.replace("__TASK__", task_text or "")
-        had_prev_model = "gemini" in models
-        prev_model = models.get("gemini")
-        models["gemini"] = model
-        try:
-            out, _err, rc = await run_gemini(prompt, "")
-        finally:
-            if had_prev_model:
-                models["gemini"] = prev_model
-            else:
-                models.pop("gemini", None)
-        if rc != 0:
-            return None
-        first = ((out or "").strip().splitlines() or [""])[0].strip().upper()
-        if first in ("BUILD", "CHAT"):
-            return first
-        return None
 
     def build_gemini_review_prompt(context_block: str, code_text: str) -> str:
         return prompt_defs.build_gemini_review_prompt(context_block, code_text)
@@ -2457,35 +2422,36 @@ Return project edits as:
             else "requires an interactive permission prompt"
         )
         return (
-            "\n\n## Known in-session commands\n"
-            "- `/plan`: planning emphasis (steps/milestones). Prefer structured guidance.\n"
-            "- `/debug`: targeted debugging (root cause and verification).\n"
-            "- `/agent`: autonomous multi-step coding within scope.\n"
-            "- `/build`: force the full build pipeline this turn.\n"
-            "- `/ask`: chat-only; no build pipeline this turn.\n"
-            "- `/research`: each available model researches on its own (no build loop); the orchestrator then verifies conflicts and compiles one answer. `@` files stay source-only.\n"
-            "- `/pdf`: generate a PDF from provided text (plain text layout; requires `reportlab`).\n"
-            "- `/repo/info`: show repo info (git status/branch/last commit).\n"
-            "- `/test`: run detected tests (best-effort).\n"
-            "- `/lint`: run detected lint (best-effort).\n"
-            "- `/run <cmd>`: run a local command with sandboxed allowlist; may require permission.\n"
-            "- `/github/info <url|owner/repo>`: fetch public GitHub repo metadata.\n"
-            "- `/github/clone <url|owner/repo> [dest]`: clone a GitHub repo into current dir.\n"
-            "- `/mcp/plugins`: list configured MCP plugins.\n"
-            "- `/mcp/tools <plugin>`: list tools published by an MCP plugin.\n"
-            "- `/mcp/call <plugin> <tool> [json]`: call a plugin tool with JSON args.\n"
-            "- `/rag/search <query>`: semantic repo search (vector index; optional deps).\n"
-            "\nLocal command execution note: `/run`, `/test`, `/lint` use a permission gate "
-            f"({allow_local_hint})."
+            "\n\n## What you can do in this session\n"
+            "A message with no slash command is a conversation. It does not write project files.\n"
+            "- `/build <task>`: the only way to run the implementation pipeline and write project files.\n"
+            "- `/ask <question>`: conversation, same as a plain message.\n"
+            "- `/plan <task>`: write or update a plan. `/plan show` and `/plan clear` read or remove it. A plan does not edit the project.\n"
+            "- `/debug <task>`: talk through a bug. It does not edit the repo.\n"
+            "- `/agent <task>`: multi-step coding advice. It does not edit the repo.\n"
+            "- `/research <question>`: each available model researches at the same time; you then compile one answer. `@` files stay source-only.\n"
+            "- `/pdf`: generate a PDF from provided text (plain text; requires `reportlab`).\n"
+            "- `@path`: include a file, PDF, or folder in the reply or in `/build`. `@Symbol` uses ctags when it is installed.\n"
+            "- `/codex/model`, `/gemini/model`, `/claude/model`, `/grok/model`: show or set that model's id.\n"
+            "- `/roles`: show which provider handles orchestrator, planner, coder, reviewer, and summariser. `/roles/<role>/<provider>` changes one.\n"
+            "- `/config`: show the effective runtime settings.\n"
+            "- `/repo/info`: git status, branch, and last commit.\n"
+            "- `/test`, `/lint`, `/run <cmd>`: local checks. Permission gate: "
+            f"{allow_local_hint}.\n"
+            "- `/github/info <url|owner/repo>` and `/github/clone <url|owner/repo> [dest]`.\n"
+            "- `/mcp/plugins`, `/mcp/tools <plugin>`, `/mcp/call <plugin> <tool> [json]`.\n"
+            "- `/rag/search <query>`: semantic repo search when the vector index is available.\n"
+            "- `/exit`: leave the session.\n"
+            "You remember corrections in this project's memory and follow them on later turns.\n"
         )
 
     # (command, right-column description) — Codex-style two-column completion menu
     _SLASH_COMMANDS_META: Tuple[Tuple[str, str], ...] = (
-        ("/build", "Force full implementation pipeline (skip BUILD/CHAT router)"),
-        ("/plan", "Planning & milestones emphasis; router still classifies"),
-        ("/debug", "Debugging & root-cause focus for this turn"),
-        ("/agent", "Autonomous multi-step coding within your scope"),
-        ("/ask", "Chat only — no Codex/Gemini build loop this turn"),
+        ("/build", "Run the full implementation pipeline and write project files"),
+        ("/plan", "Write or update a plan; does not build unless you use /build"),
+        ("/debug", "Talk through a bug; does not edit the repo"),
+        ("/agent", "Multi-step coding advice; does not edit the repo"),
+        ("/ask", "Chat only — no build pipeline this turn"),
         (
             "/research",
             "Research mode: web-grounded (no @) or source-only from @ files; no build loop",
@@ -2935,6 +2901,8 @@ Return project edits as:
                 mem.setdefault("constraints", []).append(val)
             elif kind == "decision":
                 mem.setdefault("decisions", []).append({"date": now, "text": val})
+            elif kind == "preference":
+                mem.setdefault("preferences", []).append(val)
         if changed:
             save_memory(mem)
         return changed
@@ -3628,43 +3596,6 @@ Return project edits as:
                 _token_turn_footer()
                 continue
 
-            # ---------- /ask: conversational only (skip router + build pipeline) ----------
-            if session_directive == "ask":
-                mem_ctx = mem_block.strip() if mem_block.strip() else "(none yet)"
-                ask_task_body = (attach_block or "") + (task_clean or "(no message)")
-                ask_raw, ask_err, ask_rc = await run_role(
-                    "orchestrator",
-                    ASK_MODE_PROMPT.replace("__MEMORY__", mem_ctx)
-                    .replace(
-                        "__CAPS__",
-                        runtime_stitch_capabilities_block()
-                        + runtime_clogem_commands_capabilities_block(),
-                    )
-                    .replace("__TASK__", ask_task_body),
-                    "Orchestrator: /ask reply...",
-                )
-                if ask_rc != 0:
-                    console.print()
-                    _say(f"[clogem] ERROR: Codex exited with code {ask_rc} for /ask.")
-                    if (ask_err or "").strip():
-                        console.print(
-                            Text((ask_err or "").strip()[:800], style=LOG_ERR)
-                        )
-                    console.print()
-                    _token_turn_footer()
-                    continue
-                chat_reply = ask_raw.strip()
-                chat_reply, auto_persists = extract_persist_directives(chat_reply)
-                apply_persist_directives(memory, auto_persists)
-                trace_done("Direct /ask reply ready.")
-                live_reasoning_banner_chat(task or "/ask")
-                section_rule("Reply (/ask)")
-                console.print()
-                console.print(chat_reply or "(empty reply)")
-                console.print()
-                _token_turn_footer()
-                continue
-
             # ---------- /research: each model researches, then the orchestrator compiles ----------
             if session_directive == "research":
                 research_task_body = (task_clean or "(no question)").strip()
@@ -3731,67 +3662,50 @@ Return project edits as:
                     )
                 continue
 
-            router_hint = ROUTER_DIRECTIVE_HINTS.get(session_directive or "", "")
-            with _stage("router", provider=role_provider_map.get("orchestrator", "codex")):
-                route = await resolve_turn_mode(
-                    TurnModeRequest(
-                        session_directive=session_directive,
-                        task_clean=task_clean,
-                        mem_block=mem_block,
-                        router_hint=router_hint,
-                    ),
-                    TurnModeDeps(
-                        build_router_prompt=build_router_prompt,
-                        run_codex=lambda prompt, status: run_role("orchestrator", prompt, status, stream=False),
-                        runtime_stitch_capabilities_block=runtime_stitch_capabilities_block,
-                        runtime_clogem_commands_capabilities_block=runtime_clogem_commands_capabilities_block,
-                        detect_stitch_frontend_heavy_task=detect_stitch_frontend_heavy_task,
-                        detect_prerequisite_first_task=detect_prerequisite_first_task,
-                        build_prerequisite_first_prompt=build_prerequisite_first_prompt,
-                        secondary_intent_classifier=classify_intent_secondary,
-                    ),
-                    TurnModeUI(
-                        trace_doing=trace_doing,
-                        trace_done=trace_done,
-                        say=_say,
-                        console=console,
-                        text_factory=Text,
-                        log_err_style=LOG_ERR,
-                        muted_style=MUTED,
-                        token_turn_footer=_token_turn_footer,
-                    ),
-                )
-            if route.stop_turn:
-                continue
-            mode = route.mode
-            chat_reply = route.chat_reply
-
-            if mode == "chat":
-                if attach_block:
-                    console.print(
-                        Text(
-                            "@ file/folder mentions are only inlined for BUILD tasks; "
-                            "they were not sent to this chat reply.",
-                            style=MUTED,
-                        )
+            if session_directive != "build":
+                mem_ctx = mem_block.strip() if mem_block.strip() else "(none yet)"
+                ask_task_body = (attach_block or "") + (task_clean or "(no message)")
+                mode_hint_block = CODEX_MODE_HINTS.get(session_directive or "", "")
+                reply_label = f"/{session_directive}" if session_directive else "chat"
+                ask_raw, ask_err, ask_rc = await run_role(
+                    "orchestrator",
+                    (mode_hint_block or "")
+                    + ASK_MODE_PROMPT.replace("__MEMORY__", mem_ctx)
+                    .replace(
+                        "__CAPS__",
+                        runtime_stitch_capabilities_block()
+                        + runtime_clogem_commands_capabilities_block(),
                     )
-                    console.print()
-                trace_done(
-                    "Classified as conversation; I'm skipping the code pipeline and surfacing the routed reply next."
+                    .replace("__TASK__", ask_task_body),
+                    f"Orchestrator: {reply_label} reply...",
                 )
+                if ask_rc != 0:
+                    console.print()
+                    _say(
+                        f"[clogem] ERROR: Codex exited with code {ask_rc} for {reply_label}."
+                    )
+                    if (ask_err or "").strip():
+                        console.print(
+                            Text((ask_err or "").strip()[:800], style=LOG_ERR)
+                        )
+                    console.print()
+                    _token_turn_footer()
+                    continue
+                chat_reply = ask_raw.strip()
                 chat_reply, auto_persists = extract_persist_directives(chat_reply)
                 apply_persist_directives(memory, auto_persists)
-
-                live_reasoning_banner_chat(task)
-                section_rule("Reply")
+                trace_done(f"{reply_label} reply ready.")
+                live_reasoning_banner_chat(task or reply_label)
+                section_rule(f"Reply ({reply_label})")
                 console.print()
                 console.print(chat_reply or "(empty reply)")
                 console.print()
                 _token_turn_footer()
                 continue
 
+            mode = "workflow"
             trace_done(
-                "Classified as a build; live narration starts below as each step runs."
+                "Running /build; live narration starts below as each step runs."
             )
             live_reasoning_banner_build(task, mem_block)
 

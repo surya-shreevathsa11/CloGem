@@ -49,11 +49,8 @@ class Settings:
     claude_sdk_model: str = "claude-sonnet-4-6"
     grok_sdk_model: str = "grok-4.7"
     async_llm: bool = True
-    secondary_intent_llm: bool = True
-    router_classifier_model: str = "gemini-2.5-flash-lite"
     subprocess_timeout_sec: int = 60
     profile: str = "default"
-    router_timeout_sec: int = 60
     build_timeout_sec: int = 180
     pdf_timeout_sec: int = 180
     validation_timeout_sec: int = 300
@@ -124,13 +121,6 @@ class Settings:
                 os.environ.get("CLOGEM_GROK_SDK_MODEL", "").strip() or "grok-4.7"
             ),
             async_llm=_as_bool(os.environ.get("CLOGEM_ASYNC_LLM"), True),
-            secondary_intent_llm=_as_bool(
-                os.environ.get("CLOGEM_SECONDARY_INTENT_LLM"), True
-            ),
-            router_classifier_model=(
-                os.environ.get("CLOGEM_ROUTER_CLASSIFIER_MODEL", "").strip()
-                or "gemini-2.5-flash-lite"
-            ),
             subprocess_timeout_sec=_as_int(
                 os.environ.get("CLOGEM_SUBPROCESS_TIMEOUT_SEC"), 60, minimum=1
             ),
@@ -138,11 +128,6 @@ class Settings:
                 os.environ.get("CLOGEM_PROFILE"),
                 "default",
                 ("default", "fast", "thorough"),
-            ),
-            router_timeout_sec=_as_int(
-                os.environ.get("CLOGEM_ROUTER_TIMEOUT_SEC"),
-                _as_int(os.environ.get("CLOGEM_SUBPROCESS_TIMEOUT_SEC"), 60, minimum=1),
-                minimum=1,
             ),
             build_timeout_sec=_as_int(
                 os.environ.get("CLOGEM_BUILD_TIMEOUT_SEC"),

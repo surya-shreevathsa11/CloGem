@@ -20,7 +20,6 @@ from clogem.stitch import (
     try_stitch_adapters,
 )
 from clogem.stitch.adapters import format_stitch_context_for_codex
-from clogem.task_intent import detect_prerequisite_first_task
 from clogem.services.contracts import (
     StitchStageDeps,
     StitchStageRequest,
@@ -354,7 +353,6 @@ async def maybe_run_stitch_stage(
 ) -> StitchStageResult:
     frontend_detected = detect_frontend_task(request.task_clean)
     stitch_frontend_heavy = detect_stitch_frontend_heavy_task(request.task_clean)
-    prereq_first = detect_prerequisite_first_task(request.task_clean)
     stitch_block = ""
     stitch_rules_extra = ""
     if stitch_frontend_heavy and request.stitch_website_rules.strip():
@@ -366,7 +364,7 @@ async def maybe_run_stitch_stage(
         "Pipeline gating: "
         f"mode={request.mode}, frontend_detected={frontend_detected}, "
         f"stitch_frontend_heavy={stitch_frontend_heavy}, "
-        f"prerequisite_first={prereq_first}, stitch_feature_on={request.stitch_feature_on}, "
+        f"stitch_feature_on={request.stitch_feature_on}, "
         f"session_directive={request.session_directive or '(none)'}"
     )
 
@@ -374,7 +372,7 @@ async def maybe_run_stitch_stage(
         request.stitch_feature_on
         and request.mode == "workflow"
         and stitch_frontend_heavy
-        and (not prereq_first or request.session_directive == "build")
+        and request.session_directive == "build"
     ):
         if should_skip_stitch_due_to_attachments(request.attach_block):
             ui.trace_done(
