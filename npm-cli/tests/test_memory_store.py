@@ -23,3 +23,22 @@ def test_memory_store_save_and_load_roundtrip(tmp_path):
 def test_memory_store_format_for_prompt_empty():
     store = MemoryStore("unused.json")
     assert store.format_for_prompt({}) == ""
+
+
+def test_memory_store_keeps_learned_preferences(tmp_path):
+    p = tmp_path / "memory.json"
+    store = MemoryStore(str(p))
+    store.save(
+        {
+            "stack": [],
+            "constraints": [],
+            "decisions": [],
+            "preferences": ["Keep answers short", "keep answers short"],
+            "notes": "",
+        }
+    )
+    loaded = store.load()
+    assert loaded["preferences"] == ["Keep answers short"]
+    block = store.format_for_prompt(loaded)
+    assert "How this user wants you to work" in block
+    assert "Keep answers short" in block

@@ -10,6 +10,7 @@ DEFAULT_MEMORY: Dict[str, object] = {
     "stack": [],
     "constraints": [],
     "decisions": [],
+    "preferences": [],
     "notes": "",
 }
 
@@ -38,7 +39,7 @@ class MemoryStore:
 
         out = dict(self.default_memory)
         out.update(mem or {})
-        for key in ("stack", "constraints"):
+        for key in ("stack", "constraints", "preferences"):
             vals = out.get(key)
             if not isinstance(vals, list):
                 out[key] = []
@@ -103,6 +104,7 @@ class MemoryStore:
         stack = mem.get("stack") or []
         constraints = mem.get("constraints") or []
         decisions = mem.get("decisions") or []
+        preferences = mem.get("preferences") or []
         notes = (mem.get("notes") or "").strip()
 
         if isinstance(stack, list) and stack:
@@ -114,6 +116,11 @@ class MemoryStore:
                 "If the current task names a different programming language, framework, or stack "
                 "(or explicitly switches away from the items above), follow the task for this deliverable."
             )
+        if isinstance(preferences, list) and preferences:
+            lines.append("How this user wants you to work (learned from them; follow unless they override it now):")
+            for pref in preferences:
+                if str(pref).strip():
+                    lines.append(f"  - {str(pref).strip()}")
         if isinstance(constraints, list) and constraints:
             lines.append("Constraints / rules:")
             for c in constraints:

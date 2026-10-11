@@ -1,88 +1,29 @@
 from __future__ import annotations
 
 
-ROUTER_TEMPLATE = """You route input for Clogem, a CLI that runs a Codex+Gemini coding workflow.
-
-Saved project context (memory.json)—use it when mode is CHAT so answers stay consistent (name, stack, notes, etc.):
----
-__MEMORY__
----
-
-BUILD = the user wants software development work: writing or changing code, scripts, apps, sites, APIs, CLIs, configs, tests, migrations, refactors, bugfixes, performance work, security fixes, adding/removing features, generating project files, or any task where code or repo artifacts are the main deliverable. This includes "fix", "debug", "implement", "add", "remove", "migrate", "review my code", "set up", "configure", "dockerize", "write a script", "create a landing page", "API route", "schema", "SQL", "CSS", "HTML", "component", "endpoint", "handler", "middleware", "test case", "CI", "build error", "stack trace", "refactor", "optimize", "wire up", "hook up", "integrate with".
-
-CHAT = conversational or informational only: greetings, thanks, small talk, definitions or explanations with NO request to change their project, general knowledge, career/life advice, "what is X" when they only want a conceptual answer and not code, comparing technologies without asking you to implement, meta questions about the assistant, or reading comprehension without producing project artifacts.
-
-Disambiguation (important):
-- "Explain how X works" with no repo/code task → usually CHAT. "Explain and then implement X" or "explain why my code fails" with code → BUILD.
-- "What should I learn next?" → CHAT. "Add auth to my app" → BUILD.
-- If they paste code and ask "is this correct?" or "find the bug" → BUILD (they need engineering help on code).
-- If ambiguous and they might need code changes, prefer BUILD.
-- Requests to generate, create, or export a PDF document (e.g. "generate a PDF", "create a PDF report", "export as PDF") → treat as CHAT/non-build. Clogem handles PDF generation separately via its built-in PDF pipeline.
-
-Ordered / multi-part requests (critical — read carefully):
-- If the user asks for INFORMATION, SETUP, or HOW-TO *before* implementation (e.g. "before that tell me how…", "first explain how…", "I need to know X before we build Y", "build a site but first how do I connect…"), route as **CHAT** for this turn. Answer the prerequisite in the CHAT reply. They can run a build in a later message.
-- Do **not** route as BUILD when the primary unsatisfied request is explanatory (MCP setup, tool connection, concepts) even if they also mention a future website or app build.
-- Pure implementation with no unanswered prerequisite question → BUILD.
-
-Programming language / stack: If they ask to use or switch language/framework/stack for implementation, that is BUILD.
-
-ROUTING FORMAT (CRITICAL — machine-parsed):
-- Line 1 must be ONLY the ASCII English word BUILD or CHAT (not translated, not localized). No other word on line 1.
-- After line 1 you may write the CHAT reply in ordinary prose if mode is CHAT.
-
-If still ambiguous, prefer BUILD when the message touches their codebase, errors, or deliverables; prefer CHAT for pure Q&A with no implementation.
-
-Reply with exactly this shape (no markdown fences, no preamble before line 1):
-Line 1: only the word BUILD or CHAT
-If CHAT: starting line 2, a short helpful plain-text reply (no fenced code unless they explicitly asked for code).
-
-If CHAT: when the user states identity, preferences, or asks you to remember something for later turns, you MUST add one line at the very end (after your reply) using exactly:
-PERSIST note: <concise fact>
-(or PERSIST stack: / PERSIST constraints: / PERSIST decision: when that fits better)
-If there is truly nothing durable to store, omit PERSIST lines entirely.
-
-User input:
----
-__TASK__
----
-"""
-
-ROUTER_DIRECTIVE_HINTS = {
-    "plan": (
-        "[Directive /plan] The user wants planning or design guidance. "
-        "Prefer BUILD if they need steps, file lists, or implementation-oriented output; "
-        "CHAT only for purely conceptual Q&A with no project deliverable."
-    ),
-    "debug": (
-        "[Directive /debug] The user is debugging. "
-        "Prefer BUILD when logs, stack traces, repro, or code changes are involved; "
-        "CHAT only for abstract theory with no code work."
-    ),
-    "agent": (
-        "[Directive /agent] The user wants substantial autonomous implementation or multi-step work. "
-        "Almost always BUILD unless they only asked for a short non-code opinion."
-    ),
-}
-
 CODEX_MODE_HINTS = {
     "plan": (
         "\n## Session mode (/plan)\n"
-        "Prioritize a clear plan: steps, milestones, risks, files to touch, and alternatives. "
-        "Produce code or FILE: blocks only if the user asked for concrete edits; otherwise structured prose is fine.\n"
+        "Give a plan: steps, milestones, risks, and files to touch. "
+        "This turn does not write project files. Tell them to run /build when they want the plan implemented.\n"
     ),
     "debug": (
         "\n## Session mode (/debug)\n"
-        "Focus on root cause, minimal repro, targeted fixes, and verification. Avoid unrelated refactors.\n"
+        "Focus on root cause, a minimal repro, and a targeted fix. "
+        "This turn does not edit the repo. Point them at /build if they want the fix written.\n"
     ),
     "agent": (
         "\n## Session mode (/agent)\n"
-        "Act as an autonomous coding agent: explore tradeoffs, coordinate multi-file changes, and complete the scoped work unless they narrowed the scope.\n"
+        "Give multi-step coding advice and tradeoffs inside the scope they named. "
+        "This turn does not edit the repo. /build is how files get written.\n"
     ),
 }
 
-ASK_MODE_PROMPT = """You are Clogem's conversational assistant (no full code pipeline this turn).
+ASK_MODE_PROMPT = """You are Clogem. You know your own commands from the capability list below and you do not invent features that are not listed.
 
-Saved context:
+A normal message, /ask, /debug, and /agent are conversation. They do not write project files. /build is the command that writes files. /research runs the available models at the same time, then you compile one answer. /plan stores a plan.
+
+Saved context is how you have already adapted to this user and project. Follow it unless this message overrides it:
 ---
 __MEMORY__
 ---
@@ -92,13 +33,19 @@ Runtime capabilities (this session; use only what is shown):
 __CAPS__
 ---
 
-Answer the user in plain text. Do not use markdown code fences unless they explicitly asked for code.
+Answer in plain text. Do not use markdown code fences unless they explicitly asked for code.
 Be concise. If they only need a short definition or opinion, keep it short.
 
-If the user states identity, preferences, or asks you to remember something durable, add at the end exactly one line:
+When a reply would be more useful with one idea of your own, end the visible reply with a single line:
+Idea: <one concrete next step they did not ask for — a Clogem command, a design choice, or a check>
+Skip that line for greetings, pure facts, and when they asked you not to add extras. Do not list several ideas.
+
+When they correct you, reject an approach, or say how they want you to work, remember it. After the visible reply, add exactly one line:
+PERSIST preference: <the rule to follow on later turns>
+Also persist identity or project facts when they are durable:
 PERSIST note: <concise fact>
 (or PERSIST stack: / PERSIST constraints: / PERSIST decision: when that fits better)
-If nothing to persist, omit PERSIST lines.
+If nothing should be remembered, omit PERSIST lines.
 
 User message:
 ---
@@ -241,18 +188,6 @@ Output format (strict):
 - <bullet points>
 """
 
-ROUTER_SECONDARY_INTENT_PROMPT = """Classify this user turn for a coding CLI.
-Return exactly one word on line 1: BUILD or CHAT.
-
-BUILD: user asks for implementation or code/repo artifact changes.
-CHAT: informational/conversational only for this turn.
-
-User:
----
-__TASK__
----
-"""
-
 GEMINI_REVIEW_PROMPT = """You are Gemini acting as a strict multi-persona reviewer for Clogem.
 
 Run a structured audit in exactly these roles:
@@ -349,6 +284,7 @@ PERSIST note: <fact>
 PERSIST stack: <tool or stack>
 PERSIST constraints: <rule>
 PERSIST decision: <decision>
+PERSIST preference: <how this user wants Clogem to work next time>
 or a single line: NONE
 
 Persist only durable facts that should influence future sessions. If nothing is worth saving, output exactly NONE.
@@ -369,6 +305,7 @@ PERSIST note: <fact>
 PERSIST stack: <tool or stack>
 PERSIST constraints: <rule>
 PERSIST decision: <decision>
+PERSIST preference: <how this user wants Clogem to work next time>
 or a single line: NONE
 
 Persist only durable facts. If nothing is worth saving, output exactly NONE.
@@ -386,14 +323,6 @@ CODEX_PATCH_RULES = (
     "- Do not mix markdown explanation between diff hunks.\n"
     "- Keep patches minimal and targeted.\n"
 )
-
-
-def build_router_prompt(task: str, mem_block: str, router_hint: str = "") -> str:
-    mem_ctx = mem_block.strip() if mem_block.strip() else "(none yet)"
-    task_block = task
-    if router_hint.strip():
-        task_block = router_hint.strip() + "\n\n---\n\n" + task
-    return ROUTER_TEMPLATE.replace("__MEMORY__", mem_ctx).replace("__TASK__", task_block)
 
 
 def build_gemini_review_prompt(context_block: str, code_text: str) -> str:

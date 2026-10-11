@@ -60,7 +60,7 @@ clogem/
 ├── cli.py              # Main REPL and orchestration (monolith — decomposition planned)
 ├── llm_clients.py      # OpenAI + Google GenAI SDK wrappers
 ├── services/
-│   ├── routing.py      # BUILD vs CHAT intent classification
+│   ├── routing.py      # /build runs the pipeline; other turns stay conversation
 │   ├── pipeline.py     # Build pipeline orchestration, Stitch, RAG
 │   └── commands.py     # Slash command dispatch
 ├── stitch/             # Google Stitch frontend integration

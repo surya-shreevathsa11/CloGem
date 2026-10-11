@@ -29,14 +29,14 @@ All commands available in a `clogem` session, sorted alphabetically.
 
 ## Session directives (turn mode)
 
-Prefix your message with one of these to override how that turn is routed. They do not change model settings for future turns.
+Prefix your message with one of these. They do not change model settings for future turns. Only `/build` runs the implementation pipeline.
 
 | Command | What it does | How to enable |
 |---------|-------------|---------------|
-| `/agent <task>` | Autonomous multi-step coding within your stated scope | Always available |
-| `/ask <question>` | Answer directly — skip the full build/review loop | Always available |
-| `/build <task>` | Force the full build pipeline, skip BUILD/CHAT router | Always available |
-| `/debug <task>` | Debugging and root-cause emphasis for this turn | Always available |
+| `/agent <task>` | Multi-step coding advice within your stated scope; does not edit the repo | Always available |
+| `/ask <question>` | Answer directly — no build pipeline | Always available |
+| `/build <task>` | Run the full build pipeline and write project files | Always available |
+| `/debug <task>` | Debugging and root-cause conversation; does not edit the repo | Always available |
 | `/plan <task>` | Planning and milestones emphasis; write or update `.clogem/plan.md` | Always available; `run_role` must be wired (it is in the REPL) |
 | `/research <query>` | Each available model researches independently; the orchestrator verifies conflicts and compiles one answer. `@` files stay source-only | Always available |
 | `/resume` | Show a numbered list of recent sessions; pick one to load its context (tasks done, files written, memory snapshot) into the current session | Always available |

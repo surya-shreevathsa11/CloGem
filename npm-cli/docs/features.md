@@ -18,16 +18,11 @@ Clogem is an orchestrator, not a single-model wrapper.
 
 ## 2) Build vs chat turn routing
 
-Each turn can be routed as:
+A normal message is a conversation. `/build` runs the planning/coding/review/improvement pipeline and writes project files.
 
-- **BUILD/workflow**: run planning/coding/review/improvement pipeline
-- **CHAT**: conversational answer without code pipeline
+Other session commands stay conversational or do their own job:
 
-You can force behavior with session directives:
-
-- `/build`, `/plan`, `/debug`, `/agent`, `/ask`, `/research`
-
-There is also prerequisite-first detection so Clogem answers setup/how-to questions before running a full build when appropriate.
+- `/plan`, `/debug`, `/agent`, `/ask`, `/research`
 
 ## 3) End-to-end code pipeline
 

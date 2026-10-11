@@ -159,11 +159,22 @@ def test_format_research_reports_truncates_a_huge_report():
 
 def test_each_model_researches_then_orchestrator_compiles_conflicts():
     calls: list[tuple[str, str]] = []
+    in_flight = 0
+    max_in_flight = 0
+
+    async def _hold(name: str, prompt: str) -> None:
+        nonlocal in_flight, max_in_flight
+        calls.append((name, prompt))
+        in_flight += 1
+        max_in_flight = max(max_in_flight, in_flight)
+        await asyncio.sleep(0.02)
+        in_flight -= 1
 
     async def run_provider(provider: str, prompt: str, status: str):
-        calls.append((provider, prompt))
         if "Compile one answer" in prompt or "compile one answer" in prompt.lower():
+            calls.append((provider, prompt))
             return "compiled", "", 0
+        await _hold(provider, prompt)
         if provider == "codex":
             return "Codex says 4", "", 0
         if provider == "grok":
@@ -171,7 +182,7 @@ def test_each_model_researches_then_orchestrator_compiles_conflicts():
         return f"{provider} report", "", 0
 
     async def run_gemini_grounded(prompt: str, status: str):
-        calls.append(("gemini-grounded", prompt))
+        await _hold("gemini-grounded", prompt)
         return "Gemini says 4", "", 0
 
     compiled, err, rc, reports, _note = asyncio.run(
@@ -189,15 +200,14 @@ def test_each_model_researches_then_orchestrator_compiles_conflicts():
     assert rc == 0
     assert err == ""
     assert compiled == "compiled"
-    assert [name for name, _ in calls] == [
-        "codex",
-        "gemini-grounded",
-        "grok",
-        "codex",
-    ]
-    assert "Google Search grounding" not in calls[0][1]
-    assert "Google Search grounding" in calls[1][1]
-    assert "Google Search grounding" not in calls[2][1]
+    assert max_in_flight >= 2
+    research_calls = calls[:-1]
+    assert {name for name, _ in research_calls} == {"codex", "gemini-grounded", "grok"}
+    assert calls[-1][0] == "codex"
+    prompts = {name: prompt for name, prompt in research_calls}
+    assert "Google Search grounding" not in prompts["codex"]
+    assert "Google Search grounding" in prompts["gemini-grounded"]
+    assert "Google Search grounding" not in prompts["grok"]
     compile_prompt = calls[-1][1]
     assert "Codex says 4" in compile_prompt
     assert "Gemini says 4" in compile_prompt

@@ -37,7 +37,7 @@ Clogem is an **orchestrator**: it calls external models through **named roles**.
 
 | Role | Default provider | Role in the app |
 |------|------------------|-----------------|
-| **orchestrator** | Codex | Turn routing (build vs chat), `/ask`-style chat, memory, and lightweight classifiers |
+| **orchestrator** | Codex | Conversation, `/ask`, `/research` compile, and memory |
 | **planner** | Grok (Codex if Grok is missing) | Planning step before implementation. Grok is used when the `grok` CLI or `XAI_API_KEY` is available; otherwise this role stays on Codex. |
 | **coder** | Codex | Draft code, apply diffs, improvement passes after review |
 | **reviewer** | Gemini | **Independent** review of generated code (security, design, consistency) |
@@ -47,15 +47,18 @@ Clogem is an **orchestrator**: it calls external models through **named roles**.
 
 **Grok** plans by default. It is a coding agent (Grok Build): strong at turning a task into a concrete plan, tool use, and a second opinion that is neither the Codex drafter nor the Gemini reviewer. When `grok` is on `PATH`, Clogem calls `grok -p …` after `grok` browser login. If the CLI is missing and `XAI_API_KEY` is unset, the planner falls back to Codex and Clogem still starts. The xAI API (`https://api.x.ai/v1`) is pay-per-token and is not the free grok.com chat quota. Set `CLOGEM_GROK_BACKEND=sdk` to force the API. Map other roles with `--role-provider coder=grok` if you want Grok to draft as well.
 
-### How a typical **build** turn flows
+### How a turn flows
 
-1. **Router** (usually the orchestrator on **Codex**) classifies the message as **BUILD** (run the pipeline) or **CHAT** (reply only).
-2. **Planner** (**Grok** when installed, otherwise **Codex**) outlines the change. **Coder** (**Codex**) produces or edits code.
-3. **Reviewer** (**Gemini**) audits the result without having authored it.
-4. **Coder** (**Codex**) applies improvements informed by review.
-5. **Summariser** (**Gemini**) condenses what changed.
+A normal message is a conversation. The **orchestrator** (Codex by default) answers it. `/ask`, `/debug`, and `/agent` stay on that path and do not write project files. `/plan` writes a plan. `/research` asks each available model at the same time, then the orchestrator compiles one answer.
 
-Pure chat turns skip the code pipeline when the router says **CHAT**. Special cases (e.g. **live weather/news**) can call **Gemini + Google Search grounding** on the SDK path only—see `CLOGEM_GEMINI_REALTIME` in this README.
+`/build` is the command that writes files. It does not spend a call deciding whether to build:
+
+1. **Planner** (**Grok** when installed, otherwise **Codex**) outlines the change. **Coder** (**Codex**) produces or edits code.
+2. **Reviewer** (**Gemini**) audits the result without having authored it.
+3. **Coder** (**Codex**) applies improvements informed by review.
+4. **Summariser** (**Gemini**) condenses what changed.
+
+Live weather or news questions can call **Gemini + Google Search grounding** on the SDK path only. See `CLOGEM_GEMINI_REALTIME` below.
 
 ### Backends: CLI vs SDK
 
@@ -73,17 +76,17 @@ In **`auto`**, Clogem prefers the **CLI** when it is available and falls back to
 ## Why Use Clogem Over Standalone CLIs?
 
 Standalone CLIs like `codex` or `gemini` are great for quick, direct edits.  
-Clogem is optimized for engineering quality on larger tasks by adding routing, review, and validation structure around model calls.
+Clogem is optimized for engineering quality on larger tasks by adding review and validation around model calls. You start that loop with `/build`.
 
 ### 1) Workflow Rigor (Dual-Agent Loop)
 
 - **Standalone:** usually single-author flow (model writes, human reviews).
 - **Clogem:** `Codex draft -> Gemini independent review -> Codex improve`, which mirrors a PR author/reviewer pattern and reduces shallow or hallucinated output.
 
-### 2) Intent Routing + Prerequisite-First Handling
+### 2) Explicit `/build`
 
 - **Standalone:** mixed prompts can jump into implementation too early.
-- **Clogem:** routing layer separates conversational vs build turns and can answer prerequisite questions before entering the build loop.
+- **Clogem:** a normal message is a conversation. `/build` is the command that writes project files.
 
 ### 3) Specialized Frontend Stage (Stitch)
 
@@ -723,10 +726,7 @@ For SDK mode you need:
 - Anthropic: `ANTHROPIC_API_KEY`
 - xAI (Grok SDK path): `XAI_API_KEY`
 
-Router secondary intent classifier:
-
-- `CLOGEM_SECONDARY_INTENT_LLM=1` (default on)
-- `CLOGEM_ROUTER_CLASSIFIER_MODEL` (default `gemini-2.5-flash-lite`)
+Plain messages are a conversation. `/build` is the command that runs the implementation pipeline. There is no separate chat-versus-build classifier.
 
 Async LLM execution path:
 
@@ -827,22 +827,24 @@ To avoid copying huge projects, the sandbox copies **only git-tracked files** (f
 
 ### Session directives (task mode)
 
-Prefix the **first line** of your message with one of these. They stack with `@` mentions (attachments load into the build context when you end up in BUILD).
+Prefix the **first line** of your message with one of these. A message without `/build` is a conversation. `@` mentions are included in that reply and in `/build`.
+
+On a conversation turn, Clogem uses the command list above. It can add one `Idea:` of its own. If you correct it or say how you want it to work, it stores that as a preference in `memory.json` and follows it on later turns.
 
 
 | Command    | Meaning                                                                                     |
 | ---------- | ------------------------------------------------------------------------------------------- |
-| `/build …` | Force the full implementation pipeline (skips the BUILD/CHAT router).                       |
-| `/plan …`  | Planning / design emphasis; the router still chooses BUILD vs CHAT unless you use `/build`. |
-| `/debug …` | Debugging emphasis (root cause, repro, targeted fixes).                                     |
-| `/agent …` | Autonomous, multi-step coding style within the scoped task.                                 |
-| `/ask …`   | Pure Q&A (skips the router and the Codex+Gemini build loop for this turn).                  |
-| `/research …` | Each available model researches on its own (Codex, Gemini, Grok when installed, Claude when `ANTHROPIC_API_KEY` is set), including the orchestrator's model. The orchestrator then checks conflicts and writes one answer. Without `@` files, Gemini may use Google Search grounding; other models are not told they have that search. With `@` paths, every model stays inside those sources. |
+| `/build …` | Run the full implementation pipeline and write project files. Plain messages do not.       |
+| `/plan …`  | Planning / design. Writes a plan; it does not edit the project.                            |
+| `/debug …` | Debugging conversation (root cause, repro, targeted fixes). It does not edit the project.  |
+| `/agent …` | Autonomous, multi-step coding advice within the scoped task. It does not edit the project. |
+| `/ask …`   | Pure Q&A. Same conversational path as a message with no slash command.                     |
+| `/research …` | Each available model researches at the same time (Codex, Gemini, Grok when installed, Claude when `ANTHROPIC_API_KEY` is set), including the orchestrator's model. The orchestrator then checks conflicts and writes one answer. Without `@` files, Gemini may use Google Search grounding; other models are not told they have that search. With `@` paths, every model stays inside those sources. |
 
 
 ### @ file and folder mentions
 
-In your task text you can reference paths so their contents are included in **BUILD** prompts (Codex + Gemini):
+In your task text you can reference paths so their contents are included in the reply or the `/build` prompts:
 
 - `@relative/path/to/file.py` — file contents (UTF-8 text; very large files are truncated)
 - `@docs/spec.pdf` — PDF text extraction (best effort; page-limited)
@@ -858,8 +860,6 @@ Paths must resolve under the **repo root**, your **current working directory**, 
 
 Optional limits: `CLOGEM_AT_MAX_FILE_BYTES` (default `400000`), `CLOGEM_AT_MAX_TOTAL_CHARS` (default `120000`) for the whole attachment block.
 
-`@` references are **not** inlined for pure **CHAT** routing (you’ll see a short notice).
-
 ### Google Stitch (UI-heavy frontend tasks)
 
 For **frontend-first** builds (websites, landing pages, dashboards, HTML/CSS/JS UIs), clogem can run a **Stitch stage** *before* the usual Codex draft → Gemini review → Codex improve loop:
@@ -869,7 +869,7 @@ For **frontend-first** builds (websites, landing pages, dashboards, HTML/CSS/JS 
 3. **Fold** any Stitch output (or your export) into the Codex/Gemini prompts, plus strict rules from `.ai/STITCH_WEBSITE.md`.
 4. **Non-frontend** tasks are unchanged.
 
-**Prerequisite questions first:** If you ask how to do something *before* a build (e.g. *“build a site, but before that tell me how to connect Stitch via MCP”*), clogem treats that turn as **conversation first** — no build pipeline, no Stitch stage. Use `**/build`** on a later turn when you only want implementation.
+Stitch runs only on `/build`. A plain question stays a conversation. Use `/build` when you want the implementation written into the project.
 
 **Disable** the Stitch stage entirely: `CLOGEM_STITCH=0` or `clogem --no-stitch`.
 

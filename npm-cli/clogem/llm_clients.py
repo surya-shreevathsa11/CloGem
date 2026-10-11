@@ -41,13 +41,25 @@ def _llm_max_retries() -> int:
         return 3
 
 
+def _is_deadline_timeout(exc: Exception) -> bool:
+    """A request that already waited out its deadline will not succeed faster on retry."""
+    name = exc.__class__.__name__.lower()
+    if "timeout" in name and "gateway" not in name:
+        return True
+    text = str(exc).lower()
+    if "gateway timeout" in text:
+        return False
+    return "timed out" in text or "timeout" in text
+
+
 def _is_retryable_error(exc: Exception) -> bool:
+    if _is_deadline_timeout(exc):
+        return False
     name = exc.__class__.__name__.lower()
     if any(
         key in name
         for key in (
             "ratelimit",
-            "timeout",
             "internalserver",
             "serviceunavailable",
             "apiconnection",
@@ -64,8 +76,6 @@ def _is_retryable_error(exc: Exception) -> bool:
         for needle in (
             "rate limit",
             "too many requests",
-            "timed out",
-            "timeout",
             "temporarily unavailable",
             "connection reset",
             "connection aborted",
