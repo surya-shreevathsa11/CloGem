@@ -2,7 +2,12 @@ from __future__ import annotations
 
 import asyncio
 
-from clogem.llm_clients import LLMResult, _run_with_retries, _run_with_retries_async
+from clogem.llm_clients import (
+    LLMResult,
+    _is_retryable_error,
+    _run_with_retries,
+    _run_with_retries_async,
+)
 
 
 def test_run_with_retries_retries_transient_error(monkeypatch):
@@ -51,10 +56,26 @@ def test_run_with_retries_async_retries(monkeypatch):
     async def _call() -> LLMResult:
         attempts["n"] += 1
         if attempts["n"] == 1:
-            return LLMResult("", "timeout while connecting", 1)
+            return LLMResult("", "connection reset by peer", 1)
         return LLMResult("ok-async", "", 0)
 
     out = asyncio.run(_run_with_retries_async(_call, "test"))
     assert out.returncode == 0
     assert out.text == "ok-async"
     assert attempts["n"] == 2
+
+
+def test_deadline_timeout_is_not_retried(monkeypatch):
+    monkeypatch.setenv("CLOGEM_LLM_MAX_RETRIES", "3")
+    attempts = {"n": 0}
+
+    def _call() -> LLMResult:
+        attempts["n"] += 1
+        return LLMResult("", "Request timed out.", 1)
+
+    out = _run_with_retries(_call, "test")
+    assert out.returncode == 1
+    assert out.error == "Request timed out."
+    assert attempts["n"] == 1
+    assert _is_retryable_error(TimeoutError("The read operation timed out")) is False
+    assert _is_retryable_error(Exception("504 Gateway Timeout")) is True

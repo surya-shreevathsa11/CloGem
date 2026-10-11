@@ -267,8 +267,6 @@ def _stitch_retry_attempts() -> int:
 def _looks_transient_stitch_error(detail: str) -> bool:
     d = (detail or "").lower()
     transient_markers = (
-        "timeout",
-        "timed out",
         "temporarily",
         "temporarily unavailable",
         "connection reset",
