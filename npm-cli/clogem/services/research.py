@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import os
 from typing import Awaitable, Callable, List, Optional, Sequence, Tuple
 
@@ -144,7 +145,7 @@ async def conduct_multi_model_research(
     run_gemini_grounded: RunModel,
 ) -> Tuple[str, str, int, str]:
     """
-    Each provider researches independently. The orchestrator then verifies
+    Each provider researches at the same time. The orchestrator then verifies
     conflicts and returns one compiled answer.
 
     Returns (compiled_text, error, returncode, reports_text, check_note).
@@ -152,9 +153,8 @@ async def conduct_multi_model_research(
     question = (question or "(no question)").strip()
     sources = (sources or "").strip()
     orch = (orchestrator_provider or "codex").strip().lower() or "codex"
-    reports: List[Tuple[str, str, str, int]] = []
 
-    for provider in providers:
+    async def _one_report(provider: str) -> Tuple[str, str, str, int]:
         if sources:
             prompt = _sources_prompt(question, sources)
             text, err, rc = await run_provider(
@@ -182,7 +182,9 @@ async def conduct_multi_model_research(
                 _independent_prompt(question, local_block),
                 f"{provider}: /research...",
             )
-        reports.append((provider, text or "", err or "", rc))
+        return provider, text or "", err or "", rc
+
+    reports = list(await asyncio.gather(*(_one_report(provider) for provider in providers)))
 
     reports_text = format_research_reports(reports)
     compile_prompt = _compile_prompt(
