@@ -8,6 +8,7 @@ from clogem.services.setup_wizard import (
     host_install_command,
     host_install_hint,
     missing_companions,
+    parse_shell_block,
     render_shell_block,
     run_key,
     run_setup,
@@ -121,7 +122,7 @@ def test_declined_install_does_not_run_npm(tmp_path: Path):
         calls.append(tuple(cmd))
         return CmdResult(1, "EACCES")
 
-    answers = iter(["n", "n", "n", "n", "", "", "", "", "n"])
+    answers = iter(["", "n", "n", "", "", "n"])
     home = tmp_path / "home"
     home.mkdir()
     code = run_setup(
@@ -136,6 +137,32 @@ def test_declined_install_does_not_run_npm(tmp_path: Path):
     assert code == 0
     assert calls == []
     assert not (home / ".bashrc").exists()
+
+
+def test_quick_setup_installs_only_codex_and_gemini(tmp_path: Path):
+    calls: list[tuple[str, ...]] = []
+
+    def runner(cmd):
+        calls.append(tuple(cmd))
+        return CmdResult(0)
+
+    answers = iter(["", "y", "y", "", "", "n", "n"])
+    home = tmp_path / "home"
+    home.mkdir()
+    code = run_setup(
+        assume_yes=False,
+        home=home,
+        environ={"SHELL": "/bin/zsh"},
+        which=lambda _name: None,
+        runner=runner,
+        input_fn=lambda _prompt: next(answers),
+        is_tty=True,
+    )
+    assert code == 0
+    assert calls == [
+        ("npm", "install", "-g", "@openai/codex"),
+        ("npm", "install", "-g", "@google/gemini-cli"),
+    ]
 
 
 def test_failed_npm_install_prints_sudo_hint(tmp_path: Path):
@@ -176,7 +203,7 @@ def test_setup_keeps_a_saved_key_when_the_prompt_is_skipped(tmp_path: Path):
         ),
         encoding="utf-8",
     )
-    answers = iter(["n", "", "new-claude", "", "", "n", "y"])
+    answers = iter(["n", "", "", "new-claude", "", "", "n", "y"])
     code = run_setup(
         assume_yes=False,
         home=home,
@@ -264,3 +291,17 @@ def test_key_command_rejects_an_unknown_provider(tmp_path: Path):
     )
     assert code == 2
     assert any("gemini" in note and "openai" in note for note in notes)
+
+
+def test_render_and_parse_powershell_shell_block():
+    block = render_shell_block(
+        {
+            "GEMINI_API_KEY": "value with spaces",
+            "CLOGEM_GEMINI_BACKEND": "sdk",
+        },
+        powershell=True,
+    )
+    parsed = block.join(["prefix\n", "suffix\n"])
+    values = parse_shell_block(parsed)
+    assert values["GEMINI_API_KEY"] == "value with spaces"
+    assert values["CLOGEM_GEMINI_BACKEND"] == "sdk"

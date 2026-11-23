@@ -6,6 +6,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Mapping, Optional, Sequence
@@ -19,6 +20,8 @@ COMPANIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("claude", ("npm", "install", "-g", "@anthropic-ai/claude-code")),
     ("grok", ("bash", "-c", "curl -fsSL https://x.ai/cli/install.sh | bash")),
 )
+CORE_COMPANION_NAMES = {"codex", "gemini"}
+CORE_KEY_NAMES = {"GEMINI_API_KEY", "OPENAI_API_KEY"}
 
 SUDO_HINTS = {
     "codex": "sudo npm install -g @openai/codex",
@@ -134,15 +137,29 @@ def shell_rc_path(home: Path, environ: Mapping[str, str]) -> Path:
         return home / ".zshrc"
     if shell.endswith("bash"):
         return home / ".bashrc"
+    if sys.platform.startswith("win"):
+        user_home = Path(environ.get("USERPROFILE", str(home)))
+        return user_home / "Documents" / "PowerShell" / "Microsoft.PowerShell_profile.ps1"
     if (home / ".zshrc").is_file():
         return home / ".zshrc"
     return home / ".bashrc"
 
 
-def render_shell_block(values: Mapping[str, str]) -> str:
+def _powershell_quote(value: str) -> str:
+    return "'" + value.replace("'", "''") + "'"
+
+
+def _is_powershell_profile(path: Path) -> bool:
+    return path.suffix.lower() == ".ps1"
+
+
+def render_shell_block(values: Mapping[str, str], *, powershell: bool = False) -> str:
     lines = [BEGIN]
     for key, value in values.items():
-        lines.append(f"export {key}={shlex.quote(value)}")
+        if powershell:
+            lines.append(f"$Env:{key} = {_powershell_quote(value)}")
+        else:
+            lines.append(f"export {key}={shlex.quote(value)}")
     lines.append(END)
     return "\n".join(lines) + "\n"
 
@@ -155,11 +172,23 @@ def parse_shell_block(existing: str) -> dict[str, str]:
     values: dict[str, str] = {}
     for line in body.splitlines():
         line = line.strip()
-        if not line.startswith("export ") or "=" not in line:
+        if line.startswith("export ") and "=" in line:
+            key, raw = line[len("export ") :].split("=", 1)
+            parsed = shlex.split(raw) if raw else []
+            values[key.strip()] = parsed[0] if parsed else ""
             continue
-        key, raw = line[len("export ") :].split("=", 1)
-        parsed = shlex.split(raw) if raw else []
-        values[key.strip()] = parsed[0] if parsed else ""
+        if not line.lower().startswith("$env:") or "=" not in line:
+            continue
+        left, right = line.split("=", 1)
+        key = left.split(":", 1)[1].strip()
+        raw = right.strip()
+        if len(raw) >= 2 and raw[0] == raw[-1] and raw[0] in {"'", '"'}:
+            unwrapped = raw[1:-1]
+            if raw[0] == "'":
+                unwrapped = unwrapped.replace("''", "'")
+            values[key] = unwrapped
+        else:
+            values[key] = raw
     return values
 
 
@@ -171,8 +200,6 @@ def saved_shell_values(rc_path: Path) -> dict[str, str]:
 
 def apply_saved_env(home: Optional[Path] = None, environ: Optional[dict[str, str]] = None) -> None:
     """Load the Clogem shell block into this process when the shell has not."""
-    import os
-
     target = environ if environ is not None else os.environ
     home = home or Path.home()
     for key, value in saved_shell_values(shell_rc_path(home, target)).items():
@@ -204,8 +231,17 @@ def upsert_shell_block(existing: str, block: str) -> str:
     return base + block
 
 
-def mark_complete(home: Path) -> None:
-    folder = home / ".local" / "share" / "clogem"
+def clogem_data_dir(home: Path, environ: Mapping[str, str]) -> Path:
+    if sys.platform.startswith("win"):
+        base = environ.get("LOCALAPPDATA") or environ.get("APPDATA") or str(home / "AppData" / "Local")
+        return Path(base) / "clogem"
+    if sys.platform == "darwin":
+        return home / "Library" / "Application Support" / "clogem"
+    return home / ".local" / "share" / "clogem"
+
+
+def mark_complete(home: Path, environ: Mapping[str, str]) -> None:
+    folder = clogem_data_dir(home, environ)
     folder.mkdir(parents=True, exist_ok=True)
     (folder / "setup-done").write_text("ok\n", encoding="utf-8")
 
@@ -221,6 +257,25 @@ def _yes(prompt: str, *, assume_yes: bool, is_tty: bool, input_fn: InputFn) -> b
     if not is_tty:
         return False
     answer = input_fn(f"{prompt} [y/N] ").strip().lower()
+    return answer in {"y", "yes"}
+
+
+def _yes_default(
+    prompt: str,
+    *,
+    default: bool,
+    assume_yes: bool,
+    is_tty: bool,
+    input_fn: InputFn,
+) -> bool:
+    if assume_yes:
+        return True
+    if not is_tty:
+        return default
+    suffix = "[Y/n]" if default else "[y/N]"
+    answer = input_fn(f"{prompt} {suffix} ").strip().lower()
+    if not answer:
+        return default
     return answer in {"y", "yes"}
 
 
@@ -253,7 +308,7 @@ def run_setup(
     rc_path = shell_rc_path(home, env_map)
 
     speak("Clogem setup")
-    speak("This installs Codex, Gemini, Claude Code, and Grok when they are missing,")
+    speak("This installs provider CLIs when they are missing,")
     speak("then saves the settings Clogem needs on a personal machine.")
 
     host_platform = platform or sys.platform
@@ -273,7 +328,24 @@ def run_setup(
             speak(f"Missing {label}.")
             speak(host_install_hint(host_platform, missing_host))
 
-    for name, cmd in COMPANIONS:
+    quick_setup = _yes_default(
+        "Use quick setup (recommended)?",
+        default=True,
+        assume_yes=assume_yes,
+        is_tty=tty and not assume_yes,
+        input_fn=ask,
+    )
+    full_setup = assume_yes or not quick_setup
+    if quick_setup and not full_setup:
+        speak("Quick setup installs Codex + Gemini and asks only for their keys.")
+        speak("Run clogem setup again and choose full setup to add Claude or Grok.")
+    elif full_setup and not assume_yes:
+        speak("Full setup installs Codex, Gemini, Claude Code, and Grok.")
+
+    selected_companions = [
+        row for row in COMPANIONS if (full_setup or row[0] in CORE_COMPANION_NAMES)
+    ]
+    for name, cmd in selected_companions:
         if which_fn(name):
             speak(f"{name}: already installed")
             continue
@@ -303,9 +375,11 @@ def run_setup(
     values = dict(DEFAULT_ENV)
     values.update(saved)
     speak("Gemini on a personal account uses that API key with CLOGEM_GEMINI_BACKEND=sdk.")
-    speak("Claude inside Clogem needs ANTHROPIC_API_KEY. The claude command is a separate login.")
+    if full_setup:
+        speak("Claude inside Clogem needs ANTHROPIC_API_KEY. The claude command is a separate login.")
     speak("Press Enter to keep a key that is already saved.")
-    for _name, env_name, label in API_KEYS:
+    key_rows = [row for row in API_KEYS if (full_setup or row[1] in CORE_KEY_NAMES)]
+    for _name, env_name, label in key_rows:
         entered = _secret(
             key_prompt(label, env_name, saved),
             assume_yes=assume_yes,
@@ -325,7 +399,7 @@ def run_setup(
     elif not which_fn("grok"):
         speak("After Grok is installed, run grok once and finish browser sign-in.")
 
-    block = render_shell_block(values)
+    block = render_shell_block(values, powershell=_is_powershell_profile(rc_path))
     if _yes(
         f"Write these settings to {rc_path}?",
         assume_yes=assume_yes,
@@ -340,7 +414,7 @@ def run_setup(
         speak("Settings were not written. Add them yourself if you want:")
         speak(block.rstrip())
 
-    mark_complete(home)
+    mark_complete(home, env_map)
     speak("Setup finished. Run clogem to start.")
     return 0
 
@@ -392,7 +466,10 @@ def run_key(
     values[env_name] = entered
     existing = rc_path.read_text(encoding="utf-8") if rc_path.is_file() else ""
     rc_path.parent.mkdir(parents=True, exist_ok=True)
-    rc_path.write_text(upsert_shell_block(existing, render_shell_block(values)), encoding="utf-8")
+    rc_path.write_text(
+        upsert_shell_block(existing, render_shell_block(values, powershell=_is_powershell_profile(rc_path))),
+        encoding="utf-8",
+    )
     speak(f"Saved {chosen}. Open a new terminal so clogem can see it.")
     return 0
 

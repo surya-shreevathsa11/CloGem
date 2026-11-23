@@ -25,7 +25,27 @@ This creates a self-improving coding workflow that works for:
 - CLI-based workflow (fast and repeatable)
 
 Detailed capability reference: [`docs/features.md`](docs/features.md)  
-Command reference: [`docs/help.md`](docs/help.md)
+Command reference: [`docs/commands.md`](docs/commands.md)
+
+---
+
+## Quick Start (2-3 minutes)
+
+Most users only need this:
+
+```bash
+npm install -g @shywolf/clogem
+clogem
+```
+
+On first run, choose **Quick setup** (default). It installs just the core flow (**Codex + Gemini**) and asks only for the keys that matter for daily usage.
+
+- Works on **macOS**, **Linux**, and **Windows**
+- Installs missing host tools per OS (Homebrew on macOS; apt/dnf/pacman on Linux; manual guidance on Windows)
+- You can add optional providers later with `clogem setup` and choosing full setup
+- Add or update one key anytime with `clogem key gemini` (or `openai`, `claude`, `grok`)
+
+If you are editing Clogem itself from source, continue to the full install sections below.
 
 ---
 

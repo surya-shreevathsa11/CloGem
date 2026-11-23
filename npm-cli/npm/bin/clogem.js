@@ -7,7 +7,21 @@ const os = require("os");
 const path = require("path");
 
 const pkgRoot = path.resolve(__dirname, "..", "..");
-const dataDir = path.join(os.homedir(), ".local", "share", "clogem");
+function clogemDataDir() {
+  if (process.platform === "win32") {
+    const base =
+      process.env.LOCALAPPDATA ||
+      process.env.APPDATA ||
+      path.join(os.homedir(), "AppData", "Local");
+    return path.join(base, "clogem");
+  }
+  if (process.platform === "darwin") {
+    return path.join(os.homedir(), "Library", "Application Support", "clogem");
+  }
+  return path.join(os.homedir(), ".local", "share", "clogem");
+}
+
+const dataDir = clogemDataDir();
 const appDir = path.join(dataDir, "app");
 const venvDir = path.join(dataDir, "venv");
 const versionFile = path.join(dataDir, "installed-version");
@@ -468,6 +482,7 @@ if (require.main === module) {
 }
 
 module.exports = {
+  clogemDataDir,
   PYTHON_READY,
   findReadyPython,
   pythonCandidates,
