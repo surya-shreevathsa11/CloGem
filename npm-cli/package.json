@@ -1,6 +1,6 @@
 {
   "name": "@shywolf/clogem",
-  "version": "0.1.7",
+  "version": "0.1.9",
   "description": "Clogem CLI: install Codex, Gemini, Claude, and Grok, then run the coding workflow",
   "scripts": {
     "test": "node --test tests/test_npm_python_host.js",
